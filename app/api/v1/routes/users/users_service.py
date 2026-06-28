@@ -1,9 +1,12 @@
+import re
 from datetime import UTC, datetime
 from uuid import UUID
 
+from beanie.operators import Or, RegEx
+
 from app.core.security import hash_password, verify_password
 
-from .users_models import User
+from .users_models import User, UserRole
 from .users_schemas import MePatch, UserCreate, UserPatch
 
 
@@ -28,9 +31,17 @@ async def create_user(data: UserCreate) -> User:
     return user
 
 
-async def list_users(limit: int, offset: int) -> tuple[list[User], int]:
-    total = await User.count()
-    users = await User.find_all().sort("-created_at").skip(offset).limit(limit).to_list()
+async def list_users(
+    limit: int, offset: int, q: str | None = None, role: UserRole | None = None
+) -> tuple[list[User], int]:
+    query = User.find_all()
+    if q is not None:
+        pattern = re.escape(q)
+        query = query.find(Or(RegEx(User.fullname, pattern, "i"), RegEx(User.email, pattern, "i")))
+    if role is not None:
+        query = query.find(User.role == role)
+    total = await query.count()
+    users = await query.sort("-created_at").skip(offset).limit(limit).to_list()
     return users, total
 
 

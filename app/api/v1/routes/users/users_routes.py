@@ -24,8 +24,10 @@ async def create_user(data: UserCreate) -> UserRead:
 async def list_users(
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
+    q: Annotated[str, Query()] = None,
+    role: Annotated[str, Query()] = None,
 ) -> UserList:
-    users, total = await users_service.list_users(limit=limit, offset=offset)
+    users, total = await users_service.list_users(limit=limit, offset=offset, q=q, role=role)
     return UserList(
         total=total,
         limit=limit,
