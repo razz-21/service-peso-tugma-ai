@@ -3,7 +3,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
-from .users_models import UserRole
+from .users_models import UserRole, UserStatus
 
 
 class UserBase(BaseModel):
@@ -13,6 +13,7 @@ class UserBase(BaseModel):
     fullname: str = Field(min_length=1, max_length=100)
     email: EmailStr
     role: UserRole = UserRole.OFFICER
+    status: UserStatus = UserStatus.ACTIVE
     avatar: str | None = None
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
@@ -34,6 +35,7 @@ class UserPatch(BaseModel):
     email: EmailStr | None = None
     password: str | None = Field(default=None, min_length=8, max_length=128)
     role: UserRole | None = None
+    status: UserStatus | None = None
     avatar: str | None = None
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 

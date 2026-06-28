@@ -1,5 +1,4 @@
 import re
-from datetime import UTC, datetime
 from uuid import UUID
 
 from beanie.operators import Or, RegEx
@@ -25,6 +24,7 @@ async def create_user(data: UserCreate) -> User:
         email=data.email,
         password=hash_password(data.password),
         role=data.role,
+        status=data.status,
         avatar=data.avatar,
     )
     await user.insert()
@@ -52,7 +52,6 @@ async def update_user(user: User, data: UserPatch | MePatch) -> User:
         user.password = hash_password(password)
     for field, value in changes.items():
         setattr(user, field, value)
-    user.updated_at = datetime.now(UTC)
     await user.save()
     return user
 
