@@ -1,15 +1,20 @@
+from typing import Any
+
 from beanie import init_beanie
-from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import AsyncMongoClient
 
+from app.api.v1.routes.users.users_models import User
 from app.core.config import settings
-from app.models.user import User
 
-_client: AsyncIOMotorClient | None = None
+_client: AsyncMongoClient[dict[str, Any]] | None = None
 
 
 async def init_mongo() -> None:
     global _client
-    _client = AsyncIOMotorClient(settings.MONGODB_URI)
+    # Beanie 2.x uses PyMongo's native async driver (`AsyncMongoClient`).
+    # `uuidRepresentation="standard"` is required so UUID `_id` values
+    # (see app/api/v1/routes/users/users_models.py) encode/decode correctly.
+    _client = AsyncMongoClient(settings.MONGODB_URI, uuidRepresentation="standard")
     await init_beanie(
         database=_client[settings.MONGODB_DB_NAME],
         document_models=[User],
@@ -19,5 +24,5 @@ async def init_mongo() -> None:
 async def close_mongo() -> None:
     global _client
     if _client is not None:
-        _client.close()
+        await _client.close()
         _client = None
