@@ -67,4 +67,7 @@ async def delete_user(user_id: UUID) -> None:
     user = await users_service.get_user(user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    await users_service.delete_user(user)
+    if not await users_service.delete_user(user):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete user"
+        )

@@ -46,8 +46,9 @@ async def update_user(user: User, data: UserPatch | MePatch) -> User:
     return user
 
 
-async def delete_user(user: User) -> None:
-    await user.delete()
+async def delete_user(user: User) -> bool:
+    result = await user.delete()
+    return result.acknowledged
 
 
 async def authenticate(email: str, password: str) -> User | None:
