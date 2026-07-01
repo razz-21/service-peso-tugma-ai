@@ -18,14 +18,10 @@ async def get_user_by_email(email: str) -> User | None:
 
 
 async def create_user(data: UserCreate) -> User:
+    print(data.model_dump(exclude={"password"}))
     user = User(
-        id=data.id,
-        fullname=data.fullname,
-        email=data.email,
+        **data.model_dump(exclude={"password"}),
         password=hash_password(data.password),
-        role=data.role,
-        status=data.status,
-        avatar=data.avatar,
     )
     await user.insert()
     return user

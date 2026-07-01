@@ -4,6 +4,7 @@ from beanie import init_beanie
 from pymongo import AsyncMongoClient
 
 from app.api.v1.routes.users.users_models import User
+from app.api.v1.routes.workspaces.workspaces_models import Workspace
 from app.core.config import settings
 
 _client: AsyncMongoClient[dict[str, Any]] | None = None
@@ -17,7 +18,7 @@ async def init_mongo() -> None:
     _client = AsyncMongoClient(settings.MONGODB_URI, uuidRepresentation="standard")
     await init_beanie(
         database=_client[settings.MONGODB_DB_NAME],
-        document_models=[User],
+        document_models=[User, Workspace],
     )
 
 
