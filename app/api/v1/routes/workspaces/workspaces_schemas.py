@@ -3,7 +3,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .workspaces_models import WorkspaceStatus
+from .workspaces_models import WORKSPACE_KEY_PATTERN, WorkspaceStatus
 
 
 class WorkspaceBase(BaseModel):
@@ -11,6 +11,8 @@ class WorkspaceBase(BaseModel):
 
     id: UUID
     name: str = Field(min_length=1, max_length=100)
+    # Lenient on read so legacy documents without a key still serialize.
+    key: str = ""
     description: str | None = None
     avatar: str | None = None
     status: WorkspaceStatus = WorkspaceStatus.ACTIVE
@@ -27,6 +29,7 @@ class WorkspaceBase(BaseModel):
 
 class WorkspaceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
+    key: str = Field(min_length=1, max_length=100, pattern=WORKSPACE_KEY_PATTERN)
     description: str | None = None
     avatar: str | None = None
     status: WorkspaceStatus = WorkspaceStatus.ACTIVE
@@ -34,6 +37,9 @@ class WorkspaceCreate(BaseModel):
 
 class WorkspacePatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
+    key: str | None = Field(
+        default=None, min_length=1, max_length=100, pattern=WORKSPACE_KEY_PATTERN
+    )
     description: str | None = None
     avatar: str | None = None
     status: WorkspaceStatus | None = None

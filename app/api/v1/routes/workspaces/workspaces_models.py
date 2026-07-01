@@ -11,10 +11,17 @@ class WorkspaceStatus(StrEnum):
     INACTIVE = "inactive"
 
 
+# A workspace key is a slug derived from the name: lowercase alphanumerics
+# grouped by single underscores (e.g. "Workspace 1" -> "workspace_1").
+WORKSPACE_KEY_PATTERN = r"^[a-z0-9]+(?:_[a-z0-9]+)*$"
+
+
 class Workspace(Document):
     # Application-generated UUID primary key (stored as Mongo `_id`).
     id: UUID = Field(default_factory=uuid4)  # type: ignore[assignment]
     name: str
+    # Defaulted so documents created before `key` existed still load.
+    key: str = ""
     description: str | None = None
     avatar: str | None = None
     status: WorkspaceStatus = WorkspaceStatus.ACTIVE
