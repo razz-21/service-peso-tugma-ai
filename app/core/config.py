@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 from urllib.parse import quote_plus
 
 from pydantic import Field, model_validator
@@ -30,7 +31,15 @@ class Settings(BaseSettings):
 
     JWT_SECRET_KEY: str = Field(default="change-me", min_length=8)
     JWT_ALGORITHM: str = "HS256"
-    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 10
+    JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
+    # Auth cookies. `COOKIE_SECURE` must be True in production (HTTPS only);
+    # keep it False for local http. Use `COOKIE_SAMESITE="none"` (with secure)
+    # only when the frontend is served from a cross-site domain.
+    COOKIE_SECURE: bool = False
+    COOKIE_SAMESITE: Literal["lax", "strict", "none"] = "lax"
+    COOKIE_DOMAIN: str | None = None
 
     @model_validator(mode="after")
     def assemble_mongodb_uri(self) -> "Settings":
