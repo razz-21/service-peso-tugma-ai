@@ -6,6 +6,7 @@ from fastapi import APIRouter, Cookie, Depends, Form, HTTPException, Response, s
 from fastapi.security import OAuth2PasswordRequestForm
 
 from app.api.v1.routes.users import users_service as user_service
+from app.api.v1.routes.users.users_models import UserStatus
 from app.api.v1.routes.users.users_schemas import UserCreate, UserRead
 from app.core.security import REFRESH_TOKEN_TYPE, decode_token
 
@@ -37,6 +38,11 @@ async def login(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
+        )
+    if user.status == UserStatus.INACTIVE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User is inactive",
         )
     auth_service.set_auth_cookies(
         response, auth_service.issue_tokens(str(user.id)), remember=remember_me
