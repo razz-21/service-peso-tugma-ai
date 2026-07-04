@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_current_user
-from app.api.v1.routes import auth, health, me, users, workspaces
+from app.api.v1.routes import auth, companies, health, me, users, workspaces
 
 # Routes that require an authenticated session. Applying the dependency at the
 # include level guards every endpoint under the prefix and returns 401 when no
@@ -17,4 +17,7 @@ api_router.include_router(me.router, prefix="/me", tags=["me"], dependencies=aut
 api_router.include_router(users.router, prefix="/users", tags=["users"], dependencies=auth_required)
 api_router.include_router(
     workspaces.router, prefix="/workspace", tags=["workspaces"], dependencies=auth_required
+)
+api_router.include_router(
+    companies.router, prefix="/companies", tags=["companies"], dependencies=auth_required
 )
