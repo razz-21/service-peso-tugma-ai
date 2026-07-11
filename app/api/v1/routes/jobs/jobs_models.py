@@ -11,17 +11,26 @@ class JobStatus(StrEnum):
     CLOSED = "closed"
 
 
+class Sex(StrEnum):
+    FEMALE = "Female"
+    MALE = "Male"
+    FEMALE_MALE = "Female/Male"
+
+
 class Job(Document):
     # Application-generated UUID primary key (stored as Mongo `_id`), replacing
     # the relational `job_id INT` with this codebase's MongoDB convention.
     id: UUID = Field(default_factory=uuid4)  # type: ignore[assignment]
     title: str
     description: str | None = None
-    minimum_education_attainment: str | None = None
+    minimum_education_attainment: list[str] = Field(default_factory=list)
     experience_required: str | None = None
     skills_required: list[str] = Field(default_factory=list)
     no_of_vacancies: int = 0
     salary_per_month: int | None = None
+    age_range: str | None = None
+    sex: Sex | None = None
+    civil_status: list[str] = Field(default_factory=list)
     status: JobStatus = JobStatus.ACTIVE
     # Foreign key to `companies` (Company.id). Stored as a UUID reference rather
     # than a Mongo DBRef so it round-trips like any other scalar field.

@@ -4,7 +4,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..companies.companies_models import CompanyType
-from .jobs_models import JobStatus
+from .jobs_models import JobStatus, Sex
 
 # VARCHAR/SMALLINT limits carried over from the original relational schema.
 TITLE_MAX = 50
@@ -31,11 +31,14 @@ class JobBase(BaseModel):
     id: UUID
     title: str = Field(min_length=1, max_length=TITLE_MAX)
     description: str | None = None
-    minimum_education_attainment: str | None = None
+    minimum_education_attainment: list[str] = Field(default_factory=list)
     experience_required: str | None = None
     skills_required: list[str] = Field(default_factory=list)
     no_of_vacancies: int = Field(default=1, ge=1, le=VACANCIES_MAX)
     salary_per_month: int | None = Field(default=None, ge=0)
+    age_range: str | None = None
+    sex: Sex | None = None
+    civil_status: list[str] = Field(default_factory=list)
     status: JobStatus = JobStatus.ACTIVE
     company_id: UUID
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
@@ -52,11 +55,14 @@ class JobBase(BaseModel):
 class JobCreate(BaseModel):
     title: str = Field(min_length=1, max_length=TITLE_MAX)
     description: str | None = None
-    minimum_education_attainment: str | None = None
+    minimum_education_attainment: list[str] = Field(default_factory=list)
     experience_required: str | None = None
     skills_required: list[str] = Field(default_factory=list)
     no_of_vacancies: int = Field(default=1, ge=1, le=VACANCIES_MAX)
     salary_per_month: int | None = Field(default=None, ge=0)
+    age_range: str | None = None
+    sex: Sex | None = None
+    civil_status: list[str] = Field(default_factory=list)
     status: JobStatus = JobStatus.ACTIVE
     company_id: UUID
 
@@ -64,11 +70,14 @@ class JobCreate(BaseModel):
 class JobPatch(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=TITLE_MAX)
     description: str | None = None
-    minimum_education_attainment: str | None = None
+    minimum_education_attainment: list[str] | None = None
     experience_required: str | None = None
     skills_required: list[str] | None = None
     no_of_vacancies: int | None = Field(default=None, ge=1, le=VACANCIES_MAX)
     salary_per_month: int | None = Field(default=None, ge=0)
+    age_range: str | None = None
+    sex: Sex | None = None
+    civil_status: list[str] | None = None
     status: JobStatus | None = None
     company_id: UUID | None = None
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
