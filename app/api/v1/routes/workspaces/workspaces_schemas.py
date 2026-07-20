@@ -3,7 +3,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .workspaces_models import WORKSPACE_KEY_PATTERN, WorkspaceStatus
+from .workspaces_models import WORKSPACE_KEY_PATTERN, MatchingScore, WorkspaceStatus
 
 
 class WorkspaceBase(BaseModel):
@@ -16,6 +16,8 @@ class WorkspaceBase(BaseModel):
     description: str | None = None
     avatar: str | None = None
     status: WorkspaceStatus = WorkspaceStatus.ACTIVE
+    # Defaulted on read so legacy documents without weights still serialize.
+    matching_score: MatchingScore = Field(default_factory=MatchingScore)
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
@@ -33,6 +35,7 @@ class WorkspaceCreate(BaseModel):
     description: str | None = None
     avatar: str | None = None
     status: WorkspaceStatus = WorkspaceStatus.ACTIVE
+    matching_score: MatchingScore = Field(default_factory=MatchingScore)
 
 
 class WorkspacePatch(BaseModel):
@@ -43,6 +46,7 @@ class WorkspacePatch(BaseModel):
     description: str | None = None
     avatar: str | None = None
     status: WorkspaceStatus | None = None
+    matching_score: MatchingScore | None = None
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 

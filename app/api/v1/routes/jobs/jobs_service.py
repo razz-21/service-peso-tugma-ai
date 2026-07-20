@@ -1,7 +1,7 @@
 import re
 from uuid import UUID
 
-from beanie.operators import In, Or, RegEx
+from beanie.operators import In, RegEx
 
 from ..companies.companies_models import Company
 from .jobs_models import Job, JobStatus
@@ -42,13 +42,7 @@ async def list_jobs(
         query = query.find(Job.status == status)
     if q is not None:
         pattern = re.escape(q)
-        query = query.find(
-            Or(
-                RegEx(Job.title, pattern, "i"),
-                RegEx(Job.description, pattern, "i"),
-                RegEx(Job.skills_required, pattern, "i"),
-            )
-        )
+        query = query.find(RegEx(Job.title, pattern, "i"))
     total = await query.count()
     jobs = await query.sort("-created_at").skip(offset).limit(limit).to_list()
     return jobs, total
