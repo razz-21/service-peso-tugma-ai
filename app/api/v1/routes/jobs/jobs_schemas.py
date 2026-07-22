@@ -41,6 +41,7 @@ class JobBase(BaseModel):
     civil_status: list[str] = Field(default_factory=list)
     status: JobStatus = JobStatus.ACTIVE
     company_id: UUID
+    workspace_id: UUID
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 

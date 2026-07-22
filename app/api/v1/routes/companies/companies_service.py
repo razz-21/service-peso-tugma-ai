@@ -7,20 +7,22 @@ from .companies_models import Company
 from .companies_schemas import CompanyCreate, CompanyPatch
 
 
-async def get_company(company_id: UUID) -> Company | None:
-    return await Company.get(company_id)
+async def get_company(company_id: UUID, workspace_id: UUID) -> Company | None:
+    # Scoped to the workspace: a company belonging to another tenant resolves to
+    # None, so callers surface it as a 404 rather than leaking cross-workspace data.
+    return await Company.find_one(Company.id == company_id, Company.workspace_id == workspace_id)
 
 
-async def create_company(data: CompanyCreate) -> Company:
-    company = Company(**data.model_dump())
+async def create_company(data: CompanyCreate, workspace_id: UUID) -> Company:
+    company = Company(**data.model_dump(), workspace_id=workspace_id)
     await company.insert()
     return company
 
 
 async def list_companies(
-    limit: int, offset: int, q: str | None = None
+    limit: int, offset: int, workspace_id: UUID, q: str | None = None
 ) -> tuple[list[Company], int]:
-    query = Company.find_all()
+    query = Company.find(Company.workspace_id == workspace_id)
     if q is not None:
         pattern = re.escape(q)
         query = query.find(

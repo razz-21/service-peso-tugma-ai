@@ -21,6 +21,7 @@ class CompanyBase(BaseModel):
     address: str | None = None
     contact_number: str | None = Field(default=None, max_length=CONTACT_NUMBER_MAX)
     avatar: str | None = None
+    workspace_id: UUID
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 

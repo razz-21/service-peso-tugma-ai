@@ -25,6 +25,9 @@ class Company(Document):
     address: str | None = None
     contact_number: str | None = None
     avatar: str | None = None
+    # Owning workspace (Workspace.id). Set from the session on creation; scopes
+    # the record to a single tenant.
+    workspace_id: UUID
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 

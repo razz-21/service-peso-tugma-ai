@@ -48,3 +48,20 @@ async def get_current_user(
     if user is None:
         raise credentials_exc
     return user
+
+
+async def get_current_workspace_id(
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> UUID:
+    """Resolve the active workspace from the authenticated session.
+
+    Acts as the workspace guard for tenant-scoped routes: creation endpoints for
+    applicants/companies/jobs depend on this so a caller whose session has no
+    workspace selected is rejected up front rather than persisting orphaned data.
+    """
+    if current_user.workspace_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Workspace id is required",
+        )
+    return current_user.workspace_id

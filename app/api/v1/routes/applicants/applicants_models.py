@@ -125,6 +125,9 @@ class Applicant(Document):
     eligibility: list[Eligibility] = Field(default_factory=list)
     work_experience: list[WorkExperience] = Field(default_factory=list)
     technical_skills: list[str] = Field(default_factory=list)
+    # Owning workspace (Workspace.id). Set from the session on creation; scopes
+    # the record to a single tenant.
+    workspace_id: UUID
     created_by: UUID | None = None
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())

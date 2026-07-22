@@ -8,20 +8,26 @@ from .applicants_models import Applicant
 from .applicants_schemas import ApplicantCreate, ApplicantPatch
 
 
-async def get_applicant(applicant_id: UUID) -> Applicant | None:
-    return await Applicant.get(applicant_id)
+async def get_applicant(applicant_id: UUID, workspace_id: UUID) -> Applicant | None:
+    # Scoped to the workspace: an applicant belonging to another tenant resolves
+    # to None, so callers surface it as a 404 rather than leaking cross-workspace data.
+    return await Applicant.find_one(
+        Applicant.id == applicant_id, Applicant.workspace_id == workspace_id
+    )
 
 
-async def create_applicant(data: ApplicantCreate, created_by: UUID) -> Applicant:
-    applicant = Applicant(**data.model_dump(), created_by=created_by)
+async def create_applicant(
+    data: ApplicantCreate, created_by: UUID, workspace_id: UUID
+) -> Applicant:
+    applicant = Applicant(**data.model_dump(), created_by=created_by, workspace_id=workspace_id)
     await applicant.insert()
     return applicant
 
 
 async def list_applicants(
-    limit: int, offset: int, q: str | None = None
+    limit: int, offset: int, workspace_id: UUID, q: str | None = None
 ) -> tuple[list[Applicant], int]:
-    query = Applicant.find_all()
+    query = Applicant.find(Applicant.workspace_id == workspace_id)
     if q is not None:
         pattern = re.escape(q)
         query = query.find(

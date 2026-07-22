@@ -35,6 +35,9 @@ class Job(Document):
     # Foreign key to `companies` (Company.id). Stored as a UUID reference rather
     # than a Mongo DBRef so it round-trips like any other scalar field.
     company_id: UUID
+    # Owning workspace (Workspace.id). Set from the session on creation; scopes
+    # the record to a single tenant.
+    workspace_id: UUID
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
