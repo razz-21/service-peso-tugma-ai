@@ -7,13 +7,18 @@ from app.api.deps import get_current_user, get_current_workspace_id
 from app.api.v1.routes.users.users_models import User
 
 from ..applicants import applicants_service
+from ..companies import companies_service
+from ..companies.companies_models import Company
 from ..jobs import jobs_service
 from ..jobs.jobs_models import Job
 from ..users import users_service
+from ..workspaces import workspaces_service
 from . import recommended_jobs_service
 from .recommended_jobs_models import RecommendedJob, RecommendedJobStatus
 from .recommended_jobs_schemas import (
+    RecommendedJobCompany,
     RecommendedJobCreate,
+    RecommendedJobGenerate,
     RecommendedJobJob,
     RecommendedJobList,
     RecommendedJobPatch,
@@ -58,11 +63,30 @@ async def _require_assessor(user_id: UUID) -> None:
         )
 
 
-def _to_read(recommended_job: RecommendedJob, job: Job | None) -> RecommendedJobRead:
-    # Resolve the stored `job_id` into the embedded `job` summary.
+def _to_read(
+    recommended_job: RecommendedJob, job: Job | None, company: Company | None = None
+) -> RecommendedJobRead:
+    # Resolve the stored `job_id` into the embedded `job` summary, and the job's
+    # `company_id` into the nested `company` summary ({ id, name, avatar }).
     read = RecommendedJobRead.model_validate(recommended_job)
-    read.job = RecommendedJobJob.model_validate(job) if job else None
+    if job is None:
+        read.job = None
+        return read
+    job_summary = RecommendedJobJob.model_validate(job)
+    job_summary.company = RecommendedJobCompany.model_validate(company) if company else None
+    read.job = job_summary
     return read
+
+
+def _to_read_mapped(
+    recommended_job: RecommendedJob,
+    jobs: dict[UUID, Job],
+    companies: dict[UUID, Company],
+) -> RecommendedJobRead:
+    # Build a read from pre-fetched job/company maps (batched list responses).
+    job = jobs.get(recommended_job.job_id)
+    company = companies.get(job.company_id) if job else None
+    return _to_read(recommended_job, job, company)
 
 
 @router.post("", response_model=RecommendedJobRead, status_code=status.HTTP_201_CREATED)
@@ -80,7 +104,34 @@ async def create_recommended_job(
     recommended_job = await recommended_jobs_service.create_recommended_job(
         data, workspace_id=workspace_id, assessed_by=assessed_by
     )
-    return _to_read(recommended_job, job)
+    company = await companies_service.get_company(job.company_id, workspace_id=workspace_id)
+    return _to_read(recommended_job, job, company)
+
+
+@router.post(
+    "/generate",
+    response_model=list[RecommendedJobRead],
+    status_code=status.HTTP_201_CREATED,
+)
+async def generate_recommendations(
+    data: RecommendedJobGenerate,
+    workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> list[RecommendedJobRead]:
+    # Run the AI pipeline for the applicant and persist the Top-K, then resolve
+    # each recommendation's job into the embedded summary for the response.
+    applicant = await applicants_service.get_applicant(data.applicant_id, workspace_id=workspace_id)
+    if applicant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Applicant not found")
+    workspace = await workspaces_service.get_workspace(workspace_id)
+    if workspace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+    recommendations = await recommended_jobs_service.generate_recommendations(
+        applicant, workspace, assessed_by=current_user.id, top_k=data.top_k
+    )
+    jobs = await recommended_jobs_service.get_jobs_map(recommendations, workspace_id=workspace_id)
+    companies = await jobs_service.get_companies_map(list(jobs.values()), workspace_id=workspace_id)
+    return [_to_read_mapped(rec, jobs, companies) for rec in recommendations]
 
 
 @router.get("", response_model=RecommendedJobList)
@@ -105,11 +156,12 @@ async def list_recommended_jobs(
         workspace_id=workspace_id,
     )
     jobs = await recommended_jobs_service.get_jobs_map(recommendations, workspace_id=workspace_id)
+    companies = await jobs_service.get_companies_map(list(jobs.values()), workspace_id=workspace_id)
     return RecommendedJobList(
         total=total,
         limit=limit,
         offset=offset,
-        items=[_to_read(rec, jobs.get(rec.job_id)) for rec in recommendations],
+        items=[_to_read_mapped(rec, jobs, companies) for rec in recommendations],
     )
 
 
@@ -126,7 +178,12 @@ async def get_recommended_job(
             status_code=status.HTTP_404_NOT_FOUND, detail="Recommended job not found"
         )
     job = await jobs_service.get_job(recommended_job.job_id, workspace_id=workspace_id)
-    return _to_read(recommended_job, job)
+    company = (
+        await companies_service.get_company(job.company_id, workspace_id=workspace_id)
+        if job is not None
+        else None
+    )
+    return _to_read(recommended_job, job, company)
 
 
 @router.patch("/{recommended_job_id}", response_model=RecommendedJobRead)
@@ -150,7 +207,12 @@ async def update_recommended_job(
         await _require_assessor(data.assessed_by)
     recommended_job = await recommended_jobs_service.update_recommended_job(recommended_job, data)
     job = await jobs_service.get_job(recommended_job.job_id, workspace_id=workspace_id)
-    return _to_read(recommended_job, job)
+    company = (
+        await companies_service.get_company(job.company_id, workspace_id=workspace_id)
+        if job is not None
+        else None
+    )
+    return _to_read(recommended_job, job, company)
 
 
 @router.delete("/{recommended_job_id}", status_code=status.HTTP_204_NO_CONTENT)

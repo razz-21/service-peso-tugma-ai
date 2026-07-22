@@ -36,6 +36,7 @@ class JobBase(BaseModel):
     skills_required: list[str] = Field(default_factory=list)
     no_of_vacancies: int = Field(default=1, ge=1, le=VACANCIES_MAX)
     salary_per_month: int | None = Field(default=None, ge=0)
+    location: str | None = None
     age_range: str | None = None
     sex: Sex | None = None
     civil_status: list[str] = Field(default_factory=list)
@@ -61,6 +62,7 @@ class JobCreate(BaseModel):
     skills_required: list[str] = Field(default_factory=list)
     no_of_vacancies: int = Field(default=1, ge=1, le=VACANCIES_MAX)
     salary_per_month: int | None = Field(default=None, ge=0)
+    location: str | None = None
     age_range: str | None = None
     sex: Sex | None = None
     civil_status: list[str] = Field(default_factory=list)
@@ -76,6 +78,7 @@ class JobPatch(BaseModel):
     skills_required: list[str] | None = None
     no_of_vacancies: int | None = Field(default=None, ge=1, le=VACANCIES_MAX)
     salary_per_month: int | None = Field(default=None, ge=0)
+    location: str | None = None
     age_range: str | None = None
     sex: Sex | None = None
     civil_status: list[str] | None = None

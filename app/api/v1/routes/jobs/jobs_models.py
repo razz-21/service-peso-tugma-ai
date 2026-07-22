@@ -28,6 +28,9 @@ class Job(Document):
     skills_required: list[str] = Field(default_factory=list)
     no_of_vacancies: int = 0
     salary_per_month: int | None = None
+    # Work location / address of the job. Used by the matching pipeline's
+    # location-preference score (applicant preferred locations vs this value).
+    location: str | None = None
     age_range: str | None = None
     sex: Sex | None = None
     civil_status: list[str] = Field(default_factory=list)

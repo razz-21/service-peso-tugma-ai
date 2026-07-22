@@ -3,6 +3,7 @@ from typing import Any
 from beanie import init_beanie
 from pymongo import AsyncMongoClient
 
+from app.api.v1.routes.applicant_jobs.applicant_jobs_models import ApplicantJob
 from app.api.v1.routes.applicants.applicants_models import Applicant
 from app.api.v1.routes.companies.companies_models import Company
 from app.api.v1.routes.jobs.jobs_models import Job
@@ -22,7 +23,7 @@ async def init_mongo() -> None:
     _client = AsyncMongoClient(settings.MONGODB_URI, uuidRepresentation="standard")
     await init_beanie(
         database=_client[settings.MONGODB_DB_NAME],
-        document_models=[User, Workspace, Company, Job, Applicant, RecommendedJob],
+        document_models=[User, Workspace, Company, Job, Applicant, RecommendedJob, ApplicantJob],
     )
 
 

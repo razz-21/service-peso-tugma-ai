@@ -7,6 +7,20 @@ from ..jobs.jobs_models import JobStatus
 from .recommended_jobs_models import RecommendationScores, RecommendedJobStatus
 
 
+class RecommendedJobCompany(BaseModel):
+    """Company summary embedded under a recommendation's job (resolves the FK).
+
+    `name` reads from the Company document's `company_name` attribute so read
+    responses expose `{ id, name, avatar }`.
+    """
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: UUID
+    name: str = Field(validation_alias="company_name")
+    avatar: str | None = None
+
+
 class RecommendedJobJob(BaseModel):
     """Embedded job summary for recommended-job read responses.
 
@@ -19,6 +33,10 @@ class RecommendedJobJob(BaseModel):
     id: UUID
     title: str
     status: JobStatus
+    location: str | None = None
+    salary_per_month: int | None = None
+    # Resolved from the job's `company_id` by the read endpoints.
+    company: RecommendedJobCompany | None = None
 
 
 class RecommendedJobBase(BaseModel):
@@ -28,6 +46,7 @@ class RecommendedJobBase(BaseModel):
     job_id: UUID
     applicant_id: UUID | None = None
     scores: RecommendationScores = Field(default_factory=RecommendationScores)
+    score: int = Field(default=0, ge=0, le=100)
     is_relevant: bool = False
     status: RecommendedJobStatus = RecommendedJobStatus.REFERRED
     embedded_applicant: list[float] = Field(default_factory=list)
@@ -52,6 +71,7 @@ class RecommendedJobCreate(BaseModel):
     # Required: every new recommendation must name the applicant it is for.
     applicant_id: UUID
     scores: RecommendationScores = Field(default_factory=RecommendationScores)
+    score: int = Field(default=0, ge=0, le=100)
     is_relevant: bool = False
     status: RecommendedJobStatus = RecommendedJobStatus.REFERRED
     embedded_applicant: list[float] = Field(default_factory=list)
@@ -65,6 +85,7 @@ class RecommendedJobPatch(BaseModel):
     job_id: UUID | None = None
     applicant_id: UUID | None = None
     scores: RecommendationScores | None = None
+    score: int | None = Field(default=None, ge=0, le=100)
     is_relevant: bool | None = None
     status: RecommendedJobStatus | None = None
     embedded_applicant: list[float] | None = None
@@ -87,3 +108,10 @@ class RecommendedJobList(BaseModel):
     limit: int
     offset: int
     items: list[RecommendedJobRead]
+
+
+class RecommendedJobGenerate(BaseModel):
+    """Request to (re)generate the Top-K job recommendations for an applicant."""
+
+    applicant_id: UUID
+    top_k: int = Field(default=5, ge=1, le=50)

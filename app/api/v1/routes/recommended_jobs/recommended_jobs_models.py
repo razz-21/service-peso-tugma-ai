@@ -39,6 +39,10 @@ class RecommendedJob(Document):
     # (enforced by RecommendedJobCreate and the route's FK check).
     applicant_id: UUID | None = None
     scores: RecommendationScores = Field(default_factory=RecommendationScores)
+    # Final weighted MatchScore (0-100) produced by the recommender — the paper's
+    # combined score used to rank recommendations (Table 14 `score`). Derived from
+    # `scores` and the workspace weights at generation time.
+    score: int = Field(default=0, ge=0, le=100)
     is_relevant: bool = False
     status: RecommendedJobStatus = RecommendedJobStatus.REFERRED
     embedded_applicant: list[float] = Field(default_factory=list)
