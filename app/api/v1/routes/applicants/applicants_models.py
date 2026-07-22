@@ -108,6 +108,7 @@ class Applicant(Document):
     suffix: str | None = None
     date_of_birth: str | None = None
     sex: Sex | None = None
+    civil_status: str | None = None
     citizenship: str | None = None
     height_in_cm: float | None = None
     weight_in_kg: float | None = None

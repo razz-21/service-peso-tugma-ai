@@ -4,6 +4,7 @@ from beanie.operators import In
 
 from app.api.v1.routes.applicants.applicants_models import Applicant
 from app.api.v1.routes.workspaces.workspaces_models import Workspace
+from app.matching.eligibility import is_eligible
 from app.matching.embeddings import embed, embed_batch
 from app.matching.profile import (
     applicant_experience_years,
@@ -170,6 +171,12 @@ async def generate_recommendations(
     ).to_list()
     if not jobs:
         return []
+
+    # Hard eligibility gate: drop jobs the applicant is categorically ineligible
+    # for (no open vacancy, or a specified age range / sex / civil status the
+    # applicant fails) before scoring. An emptied list still flows through so a
+    # regenerate clears the applicant's stale recommendations.
+    jobs = [job for job in jobs if is_eligible(applicant, job)]
     await _ensure_job_embeddings(jobs)
 
     scored: list[tuple[Job, RecommendationScores, int, list[str]]] = []

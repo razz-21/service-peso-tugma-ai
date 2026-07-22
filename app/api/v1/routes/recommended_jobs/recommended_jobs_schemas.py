@@ -35,6 +35,16 @@ class RecommendedJobJob(BaseModel):
     status: JobStatus
     location: str | None = None
     salary_per_month: int | None = None
+    no_of_vacancies: int = 0
+    # Requirement fields, surfaced so the client can render the applicant-vs-job
+    # comparison view (including the hard eligibility gates) without a second job
+    # fetch. `sex` is emitted as its plain string value.
+    skills_required: list[str] = Field(default_factory=list)
+    experience_required: str | None = None
+    minimum_education_attainment: list[str] = Field(default_factory=list)
+    age_range: str | None = None
+    sex: str | None = None
+    civil_status: list[str] = Field(default_factory=list)
     # Resolved from the job's `company_id` by the read endpoints.
     company: RecommendedJobCompany | None = None
 

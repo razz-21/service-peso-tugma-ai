@@ -7,9 +7,19 @@ are checked.
 """
 
 import math
+from datetime import date
 from types import SimpleNamespace
 
 from app.matching import preprocessing
+from app.matching.eligibility import (
+    age_matches,
+    applicant_age,
+    civil_status_matches,
+    has_open_vacancy,
+    is_eligible,
+    parse_age_range,
+    sex_matches,
+)
 from app.matching.profile import (
     applicant_experience_years,
     applicant_to_text,
@@ -254,3 +264,86 @@ def test_embed_batch_empty_short_circuits_without_loading_model() -> None:
 
     assert embeddings.embed_batch([]) == []
     assert embeddings._model is None  # still lazy — empty batch never loads the model
+
+
+# --- Eligibility -----------------------------------------------------------
+
+_TODAY = date(2026, 7, 22)
+
+
+def test_applicant_age_from_iso_date() -> None:
+    assert applicant_age("1996-05-20", today=_TODAY) == 30
+    # Birthday not yet reached this year.
+    assert applicant_age("1996-12-01", today=_TODAY) == 29
+
+
+def test_applicant_age_unparseable_is_none() -> None:
+    assert applicant_age(None) is None
+    assert applicant_age("not-a-date") is None
+
+
+def test_parse_age_range_variants() -> None:
+    assert parse_age_range("18-30") == (18, 30)
+    assert parse_age_range("18 to 30") == (18, 30)
+    assert parse_age_range("21+") == (21, None)
+    assert parse_age_range("at least 21") == (21, None)
+    assert parse_age_range("up to 40") == (None, 40)
+    assert parse_age_range("30 and below") == (None, 30)
+    assert parse_age_range(None) == (None, None)
+    assert parse_age_range("any age") == (None, None)
+
+
+def test_age_matches_within_and_outside_range() -> None:
+    assert age_matches(25, "18-30") is True
+    assert age_matches(31, "18-30") is False
+    assert age_matches(17, "18-30") is False
+    # No constraint / unknown age → always eligible.
+    assert age_matches(15, None) is True
+    assert age_matches(None, "18-30") is True
+
+
+def test_sex_matches_rules() -> None:
+    assert sex_matches("Female", "Female") is True
+    assert sex_matches("Male", "Female") is False
+    # "Female/Male" on the job means no restriction.
+    assert sex_matches("Male", "Female/Male") is True
+    # No job requirement, or unknown applicant sex → eligible.
+    assert sex_matches("Male", None) is True
+    assert sex_matches(None, "Female") is True
+
+
+def test_civil_status_matches_rules() -> None:
+    assert civil_status_matches("Single", ["Single", "Married"]) is True
+    assert civil_status_matches("Widowed", ["Single", "Married"]) is False
+    assert civil_status_matches("single", ["Single"]) is True  # case-insensitive
+    # No requirement, or unknown applicant status → eligible.
+    assert civil_status_matches("Single", []) is True
+    assert civil_status_matches(None, ["Single"]) is True
+
+
+def test_has_open_vacancy() -> None:
+    assert has_open_vacancy(2) is True
+    assert has_open_vacancy(0) is False
+    assert has_open_vacancy(None) is True
+
+
+def test_is_eligible_all_gates_pass() -> None:
+    applicant = SimpleNamespace(date_of_birth="1996-05-20", sex="Male")
+    job = SimpleNamespace(no_of_vacancies=2, age_range="18-40", sex="Female/Male", civil_status=[])
+    assert is_eligible(applicant, job) is True
+
+
+def test_is_eligible_fails_on_each_gate() -> None:
+    applicant = SimpleNamespace(date_of_birth="1996-05-20", sex="Male")  # age 30 as of _TODAY
+    base = dict(no_of_vacancies=1, age_range="18-40", sex="Male", civil_status=[])
+
+    assert is_eligible(applicant, SimpleNamespace(**{**base, "no_of_vacancies": 0})) is False
+    assert is_eligible(applicant, SimpleNamespace(**{**base, "age_range": "18-25"})) is False
+    assert is_eligible(applicant, SimpleNamespace(**{**base, "sex": "Female"})) is False
+
+
+def test_is_eligible_skips_unavailable_data() -> None:
+    # Sparse applicant + unconstrained job → eligible (every gate not applicable).
+    applicant = SimpleNamespace(date_of_birth=None, sex=None)
+    job = SimpleNamespace(no_of_vacancies=1, age_range=None, sex=None, civil_status=[])
+    assert is_eligible(applicant, job) is True
