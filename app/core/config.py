@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "peso-tugma-ai"
     API_V1_PREFIX: str = "/api/v1"
 
+    # Semantic embedding model used by the job-matching AI pipeline. Default is
+    # the paper's selected model (balanced accuracy/speed/size). Downloaded on
+    # first use by sentence-transformers and cached locally thereafter.
+    EMBEDDING_MODEL_NAME: str = "sentence-transformers/all-MiniLM-L12-v2"
+
     CORS_ORIGINS: str = "http://localhost:3000"
 
     MONGODB_USERNAME: str = "username"

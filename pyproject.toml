@@ -45,3 +45,9 @@ testpaths = ["tests"]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+
+# sentence-transformers ships no type information; ignore its missing stubs so
+# strict mode doesn't fail on the embedding-model import.
+[[tool.mypy.overrides]]
+module = ["sentence_transformers.*"]
+ignore_missing_imports = true
