@@ -11,12 +11,12 @@ from datetime import date
 from types import SimpleNamespace
 
 from app.matching import preprocessing
-from app.matching.eligibility import (
+from app.matching.primary_requirements import (
     age_matches,
     applicant_age,
     civil_status_matches,
     has_open_vacancy,
-    is_eligible,
+    meets_primary_requirements,
     parse_age_range,
     sex_matches,
 )
@@ -266,7 +266,7 @@ def test_embed_batch_empty_short_circuits_without_loading_model() -> None:
     assert embeddings._model is None  # still lazy — empty batch never loads the model
 
 
-# --- Eligibility -----------------------------------------------------------
+# --- Primary requirements --------------------------------------------------
 
 _TODAY = date(2026, 7, 22)
 
@@ -297,7 +297,7 @@ def test_age_matches_within_and_outside_range() -> None:
     assert age_matches(25, "18-30") is True
     assert age_matches(31, "18-30") is False
     assert age_matches(17, "18-30") is False
-    # No constraint / unknown age → always eligible.
+    # No constraint / unknown age → always passes.
     assert age_matches(15, None) is True
     assert age_matches(None, "18-30") is True
 
@@ -307,7 +307,7 @@ def test_sex_matches_rules() -> None:
     assert sex_matches("Male", "Female") is False
     # "Female/Male" on the job means no restriction.
     assert sex_matches("Male", "Female/Male") is True
-    # No job requirement, or unknown applicant sex → eligible.
+    # No job requirement, or unknown applicant sex → passes.
     assert sex_matches("Male", None) is True
     assert sex_matches(None, "Female") is True
 
@@ -316,7 +316,7 @@ def test_civil_status_matches_rules() -> None:
     assert civil_status_matches("Single", ["Single", "Married"]) is True
     assert civil_status_matches("Widowed", ["Single", "Married"]) is False
     assert civil_status_matches("single", ["Single"]) is True  # case-insensitive
-    # No requirement, or unknown applicant status → eligible.
+    # No requirement, or unknown applicant status → passes.
     assert civil_status_matches("Single", []) is True
     assert civil_status_matches(None, ["Single"]) is True
 
@@ -327,23 +327,31 @@ def test_has_open_vacancy() -> None:
     assert has_open_vacancy(None) is True
 
 
-def test_is_eligible_all_gates_pass() -> None:
+def test_meets_primary_requirements_all_gates_pass() -> None:
     applicant = SimpleNamespace(date_of_birth="1996-05-20", sex="Male")
     job = SimpleNamespace(no_of_vacancies=2, age_range="18-40", sex="Female/Male", civil_status=[])
-    assert is_eligible(applicant, job) is True
+    assert meets_primary_requirements(applicant, job) is True
 
 
-def test_is_eligible_fails_on_each_gate() -> None:
+def test_meets_primary_requirements_fails_on_each_gate() -> None:
     applicant = SimpleNamespace(date_of_birth="1996-05-20", sex="Male")  # age 30 as of _TODAY
     base = dict(no_of_vacancies=1, age_range="18-40", sex="Male", civil_status=[])
 
-    assert is_eligible(applicant, SimpleNamespace(**{**base, "no_of_vacancies": 0})) is False
-    assert is_eligible(applicant, SimpleNamespace(**{**base, "age_range": "18-25"})) is False
-    assert is_eligible(applicant, SimpleNamespace(**{**base, "sex": "Female"})) is False
+    assert (
+        meets_primary_requirements(applicant, SimpleNamespace(**{**base, "no_of_vacancies": 0}))
+        is False
+    )
+    assert (
+        meets_primary_requirements(applicant, SimpleNamespace(**{**base, "age_range": "18-25"}))
+        is False
+    )
+    assert (
+        meets_primary_requirements(applicant, SimpleNamespace(**{**base, "sex": "Female"})) is False
+    )
 
 
-def test_is_eligible_skips_unavailable_data() -> None:
-    # Sparse applicant + unconstrained job → eligible (every gate not applicable).
+def test_meets_primary_requirements_skips_unavailable_data() -> None:
+    # Sparse applicant + unconstrained job → passes (every gate not applicable).
     applicant = SimpleNamespace(date_of_birth=None, sex=None)
     job = SimpleNamespace(no_of_vacancies=1, age_range=None, sex=None, civil_status=[])
-    assert is_eligible(applicant, job) is True
+    assert meets_primary_requirements(applicant, job) is True

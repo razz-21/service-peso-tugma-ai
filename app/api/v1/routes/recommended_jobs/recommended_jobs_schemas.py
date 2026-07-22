@@ -37,7 +37,7 @@ class RecommendedJobJob(BaseModel):
     salary_per_month: int | None = None
     no_of_vacancies: int = 0
     # Requirement fields, surfaced so the client can render the applicant-vs-job
-    # comparison view (including the hard eligibility gates) without a second job
+    # comparison view (including the hard primary-requirement gates) without a second job
     # fetch. `sex` is emitted as its plain string value.
     skills_required: list[str] = Field(default_factory=list)
     experience_required: str | None = None

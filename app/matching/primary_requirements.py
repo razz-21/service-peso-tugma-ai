@@ -1,8 +1,8 @@
-"""Hard eligibility gates for job recommendations.
+"""Hard primary-requirement gates for job recommendations.
 
 The MatchScore is a *soft* ranking signal, but some job fields are pass/fail:
-a job the applicant is categorically ineligible for should never be
-recommended, regardless of how well the résumé embeds. These pure predicates
+a job whose primary requirements the applicant categorically fails should never
+be recommended, regardless of how well the résumé embeds. These pure predicates
 enforce the applicable gates — open vacancies, age range, sex and civil status.
 
 Every gate is "if applicable": it is skipped (treated as a pass) when the job
@@ -125,8 +125,8 @@ def has_open_vacancy(no_of_vacancies: int | None) -> bool:
     return no_of_vacancies is None or no_of_vacancies > 0
 
 
-def is_eligible(applicant: object, job: object) -> bool:
-    """Combined hard-eligibility gate for recommending ``job`` to ``applicant``.
+def meets_primary_requirements(applicant: object, job: object) -> bool:
+    """Combined hard primary-requirement gate for recommending ``job`` to ``applicant``.
 
     Reads attributes defensively so lightweight stand-ins (and models that add
     ``civil_status`` later) work. Returns ``False`` as soon as any applicable

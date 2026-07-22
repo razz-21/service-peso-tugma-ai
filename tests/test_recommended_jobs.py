@@ -1,11 +1,11 @@
 """Integration tests for `generate_recommendations`, focused on the hard
-eligibility filter.
+primary-requirement filter.
 
 The embedding model and MongoDB are stubbed so the service runs in-memory: only
-the real scoring / eligibility / persistence *wiring* is exercised. The point is
-to prove that jobs the applicant is ineligible for (closed vacancy, age range,
-sex, civil status) never reach the persisted Top-K, even when they would
-otherwise out-score the eligible ones.
+the real scoring / primary-requirement / persistence *wiring* is exercised. The
+point is to prove that jobs whose primary requirements the applicant fails
+(closed vacancy, age range, sex, civil status) never reach the persisted Top-K,
+even when they would otherwise out-score the qualifying ones.
 
 Beanie is never initialised here, so both the query fields the service
 references (``Job.workspace_id`` …) and the ``RecommendedJob`` document are
@@ -135,18 +135,18 @@ def _patch_jobs(monkeypatch: pytest.MonkeyPatch, jobs: list[object]) -> None:
     monkeypatch.setattr(svc.Job, "find", lambda *_a, **_k: _FakeQuery(jobs))
 
 
-async def test_generate_excludes_ineligible_jobs(
+async def test_generate_excludes_jobs_failing_primary_requirements(
     monkeypatch: pytest.MonkeyPatch, stub_pipeline: _Pipeline
 ) -> None:
     applicant = _applicant()  # 30 / Male / Single
-    eligible = _job(title="Eligible")
+    qualifying = _job(title="Qualifying")
     # Each of these would score well (matching skills) but fails one hard gate.
     bad_age = _job(title="Too old", age_range="18-25")
     bad_sex = _job(title="Female only", sex="Female")
     no_seats = _job(title="Filled", no_of_vacancies=0)
     bad_civil = _job(title="Married only", civil_status=["Married"])
 
-    jobs: list[object] = [eligible, bad_age, bad_sex, no_seats, bad_civil]
+    jobs: list[object] = [qualifying, bad_age, bad_sex, no_seats, bad_civil]
     _patch_jobs(monkeypatch, jobs)
 
     results = await svc.generate_recommendations(
@@ -154,12 +154,12 @@ async def test_generate_excludes_ineligible_jobs(
     )
 
     recommended_ids: set[UUID] = {rec.job_id for rec in results}
-    assert recommended_ids == {eligible.id}
+    assert recommended_ids == {qualifying.id}
     # The persisted rows match what is returned.
-    assert {rec.job_id for rec in stub_pipeline.inserted} == {eligible.id}
+    assert {rec.job_id for rec in stub_pipeline.inserted} == {qualifying.id}
 
 
-async def test_generate_keeps_all_eligible_jobs(
+async def test_generate_keeps_all_qualifying_jobs(
     monkeypatch: pytest.MonkeyPatch, stub_pipeline: _Pipeline
 ) -> None:
     applicant = _applicant()
@@ -177,7 +177,7 @@ async def test_generate_keeps_all_eligible_jobs(
     assert {rec.job_id for rec in results} == {job.id for job in jobs}
 
 
-async def test_generate_with_no_eligible_jobs_clears_recommendations(
+async def test_generate_with_no_qualifying_jobs_clears_recommendations(
     monkeypatch: pytest.MonkeyPatch, stub_pipeline: _Pipeline
 ) -> None:
     applicant = _applicant()  # 30 years old

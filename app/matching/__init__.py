@@ -7,16 +7,16 @@ explicitly (`from app.matching.embeddings import embed`) so that `import
 app.matching` stays lightweight for the pure-Python scoring/preprocessing paths.
 """
 
-from .eligibility import (
+from .preprocessing import clean, preprocess, remove_stopwords
+from .primary_requirements import (
     age_matches,
     applicant_age,
     civil_status_matches,
     has_open_vacancy,
-    is_eligible,
+    meets_primary_requirements,
     parse_age_range,
     sex_matches,
 )
-from .preprocessing import clean, preprocess, remove_stopwords
 from .profile import applicant_experience_years, applicant_to_text, job_to_text
 from .scoring import (
     DEFAULT_WEIGHTS,
@@ -46,8 +46,8 @@ __all__ = [
     "education_match",
     "experience_match",
     "has_open_vacancy",
-    "is_eligible",
     "job_to_text",
+    "meets_primary_requirements",
     "location_match",
     "parse_age_range",
     "parse_required_years",
