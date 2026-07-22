@@ -57,12 +57,56 @@ def skills_match(
 
 _YEARS_RE = re.compile(r"(\d+(?:\.\d+)?)\s*\+?\s*(?:years?|yrs?)", flags=re.IGNORECASE)
 
+# Words that carry no field/role signal on their own. Once the "N years" phrase
+# is stripped, a requirement made up solely of these is a purely numeric (or
+# empty) constraint with nothing qualitative left to semantically match.
+_EXPERIENCE_FILLER = frozenset(
+    {
+        "experience",
+        "experiences",
+        "work",
+        "working",
+        "related",
+        "relevant",
+        "field",
+        "minimum",
+        "least",
+        "at",
+        "of",
+        "in",
+        "the",
+        "a",
+        "an",
+        "and",
+        "or",
+        "with",
+        "plus",
+        "preferably",
+        "preferred",
+        "required",
+        "req",
+        "years",
+        "year",
+        "yrs",
+        "yr",
+        "min",
+    }
+)
+
+# Empirical cosine band for the MiniLM sentence model: a strongly related
+# requirement/experience pair sits around ``_SIM_HIGH``, an unrelated pair around
+# ``_SIM_LOW``. Rescaling that band onto [0, 1] lets a genuine field match clear
+# the "met" threshold while an unrelated role (e.g. a front-end developer against
+# an electrical-engineering requirement) stays well below it. Tunable constants.
+_SIM_LOW = 0.15
+_SIM_HIGH = 0.55
+
 
 def parse_required_years(text: str | None) -> float | None:
     """Extract a required-years figure from free text (e.g. ``"3 years"``).
 
     Returns ``None`` when no ``N year(s)/yr`` pattern is present, which callers
-    treat as "no experience constraint".
+    treat as "no numeric experience constraint".
     """
     if not text:
         return None
@@ -70,20 +114,71 @@ def parse_required_years(text: str | None) -> float | None:
     return float(match.group(1)) if match is not None else None
 
 
-def experience_match(
-    applicant_years: float, required_years: float | None
-) -> tuple[float, str | None]:
-    """Ratio of applicant experience to the requirement, capped at 1.0.
+def experience_requirement_terms(text: str | None) -> str | None:
+    """The qualitative (field/role) part of an experience requirement, if any.
 
-    No parseable requirement is treated as no constraint (1.0). Returns
-    ``(score, reason)`` where ``reason`` is set only when the requirement is met.
+    Strips the ``N years`` phrase and returns what remains only when it carries a
+    real field/role signal — e.g. ``"Electrical Engineer"`` from ``"3 years as an
+    Electrical Engineer"``. Returns ``None`` for empty text or a purely numeric
+    requirement (``"3 years experience"``), which has nothing to match against.
+    The returned text is meant to be embedded and compared to the applicant's
+    experience; the embedding itself lives outside this pure-scoring module.
     """
-    if required_years is None or required_years <= 0:
+    if not text:
+        return None
+    remainder = _YEARS_RE.sub(" ", text)
+    has_signal = any(
+        token.lower() not in _EXPERIENCE_FILLER for token in re.findall(r"[a-zA-Z]+", remainder)
+    )
+    if not has_signal:
+        return None
+    return re.sub(r"\s+", " ", remainder).strip(" ,.-")
+
+
+def _calibrate_similarity(cosine: float) -> float:
+    """Rescale a raw cosine similarity onto a [0, 1] experience sub-score."""
+    return max(0.0, min(1.0, (cosine - _SIM_LOW) / (_SIM_HIGH - _SIM_LOW)))
+
+
+def experience_match(
+    applicant_years: float,
+    required_years: float | None,
+    qualitative_similarity: float | None = None,
+) -> tuple[float, str | None]:
+    """Score an applicant's experience against a job's requirement.
+
+    Averages whichever of two independent components are present:
+
+    * **Years** — ratio of ``applicant_years`` to ``required_years`` (capped at
+      1.0), when the requirement names a number of years.
+    * **Qualitative** — a calibrated semantic similarity between the requirement's
+      field/role wording and the applicant's experience, supplied as a raw cosine
+      via ``qualitative_similarity`` (the embedding is computed by the caller).
+
+    When neither component is present the requirement is treated as no constraint
+    (1.0) — previously the qualitative case was silently treated this way, so a
+    field/role requirement always scored "met". Returns ``(score, reason)`` where
+    ``reason`` is set only when a years requirement is met.
+    """
+    years_score: float | None = None
+    if required_years is not None and required_years > 0:
+        years_score = 0.0 if applicant_years <= 0 else min(applicant_years / required_years, 1.0)
+
+    qualitative_score = (
+        _calibrate_similarity(qualitative_similarity)
+        if qualitative_similarity is not None
+        else None
+    )
+
+    components = [score for score in (years_score, qualitative_score) if score is not None]
+    if not components:
         return 1.0, None
-    if applicant_years <= 0:
-        return 0.0, None
-    score = min(applicant_years / required_years, 1.0)
-    reason = f"{applicant_years:.1f}+ yrs experience" if score >= 1.0 else None
+    score = sum(components) / len(components)
+    reason = (
+        f"{applicant_years:.1f}+ yrs experience"
+        if years_score is not None and years_score >= 1.0
+        else None
+    )
     return score, reason
 
 

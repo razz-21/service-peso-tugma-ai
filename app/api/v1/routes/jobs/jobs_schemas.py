@@ -40,6 +40,7 @@ class JobBase(BaseModel):
     age_range: str | None = None
     sex: Sex | None = None
     civil_status: list[str] = Field(default_factory=list)
+    eligibility: str | None = None
     status: JobStatus = JobStatus.ACTIVE
     company_id: UUID
     workspace_id: UUID
@@ -66,6 +67,7 @@ class JobCreate(BaseModel):
     age_range: str | None = None
     sex: Sex | None = None
     civil_status: list[str] = Field(default_factory=list)
+    eligibility: str | None = None
     status: JobStatus = JobStatus.ACTIVE
     company_id: UUID
 
@@ -82,6 +84,7 @@ class JobPatch(BaseModel):
     age_range: str | None = None
     sex: Sex | None = None
     civil_status: list[str] | None = None
+    eligibility: str | None = None
     status: JobStatus | None = None
     company_id: UUID | None = None
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())

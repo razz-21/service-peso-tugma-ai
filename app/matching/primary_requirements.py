@@ -11,6 +11,7 @@ datum, so a sparse profile is never penalised by a constraint we cannot check.
 """
 
 import re
+from collections.abc import Iterable
 from datetime import UTC, date, datetime
 
 # "Female/Male" on either side means "no sex restriction".
@@ -123,6 +124,37 @@ def civil_status_matches(applicant_civil: str | None, allowed: list[str]) -> boo
 def has_open_vacancy(no_of_vacancies: int | None) -> bool:
     """Whether the job still advertises at least one open seat."""
     return no_of_vacancies is None or no_of_vacancies > 0
+
+
+def eligibility_matches(
+    applicant_eligibilities: Iterable[object] | None, job_eligibility: str | None
+) -> bool:
+    """Whether the applicant holds an eligibility the job asks for.
+
+    Unlike the hard gates above this is a *soft*, informational signal: it does
+    not drop the job from the recommendations, it just records whether the
+    applicant's eligibilities (civil-service, PRC licences, ...) satisfy the
+    job's free-text ``eligibility`` requirement, so the comparison view can flag
+    the gap. Treated as eligible when the job states no requirement (nothing to
+    check); not eligible when a requirement is stated but the applicant lists no
+    matching eligibility.
+
+    ``applicant_eligibilities`` is read defensively — each item may be an
+    ``Eligibility`` model (``.title``) or a bare string — so lightweight
+    stand-ins work.
+    """
+    required = " ".join((job_eligibility or "").split()).strip().lower()
+    if not required:
+        return True
+    titles: list[str] = []
+    for item in applicant_eligibilities or []:
+        raw = getattr(item, "title", item)
+        title = " ".join(str(raw or "").split()).strip().lower()
+        if title:
+            titles.append(title)
+    if not titles:
+        return False
+    return any(title in required or required in title for title in titles)
 
 
 def meets_primary_requirements(applicant: object, job: object) -> bool:

@@ -5,8 +5,10 @@ from beanie.operators import In
 from app.api.v1.routes.applicants.applicants_models import Applicant
 from app.api.v1.routes.workspaces.workspaces_models import Workspace
 from app.matching.embeddings import embed, embed_batch
-from app.matching.primary_requirements import meets_primary_requirements
+from app.matching.preprocessing import preprocess
+from app.matching.primary_requirements import eligibility_matches, meets_primary_requirements
 from app.matching.profile import (
+    applicant_experience_text,
     applicant_experience_years,
     applicant_to_text,
     job_to_text,
@@ -18,6 +20,7 @@ from app.matching.scoring import (
     cosine_similarity,
     education_match,
     experience_match,
+    experience_requirement_terms,
     location_match,
     parse_required_years,
     skills_match,
@@ -160,6 +163,11 @@ async def generate_recommendations(
     # Applicant-side features (computed once, reused across all jobs).
     applicant_vec = embed(applicant_to_text(applicant))
     applicant_years = applicant_experience_years(applicant)
+    applicant_experience = applicant_experience_text(applicant)
+    # Embedding of the applicant's roles/qualifications, for the qualitative
+    # experience match. None when the applicant has no experience/education text
+    # on file — a qualitative requirement then scores 0 (no evidence).
+    applicant_experience_vec = embed(applicant_experience) if applicant_experience else None
     highest_education = (
         applicant.educational_background.highest_education_level
         if applicant.educational_background is not None
@@ -179,12 +187,31 @@ async def generate_recommendations(
     jobs = [job for job in jobs if meets_primary_requirements(applicant, job)]
     await _ensure_job_embeddings(jobs)
 
+    # Embed each job's qualitative experience requirement (field/role wording) in
+    # one batch, so the per-job loop can cosine-compare it to the applicant's
+    # experience without re-encoding. Jobs with a purely numeric or empty
+    # requirement have no qualitative term and are skipped here.
+    job_qual_terms = {job.id: experience_requirement_terms(job.experience_required) for job in jobs}
+    qual_jobs = [job for job in jobs if job_qual_terms[job.id]]
+    qual_vectors = embed_batch([preprocess(job_qual_terms[job.id] or "") for job in qual_jobs])
+    job_qual_vec = {job.id: vec for job, vec in zip(qual_jobs, qual_vectors, strict=True)}
+
     scored: list[tuple[Job, RecommendationScores, int, list[str]]] = []
     for job in jobs:
         semantic = cosine_similarity(applicant_vec, job.embedding)
         skills, matched_skills = skills_match(applicant.technical_skills, job.skills_required)
+        qualitative_similarity: float | None = None
+        if job_qual_terms[job.id] is not None:
+            qual_vec = job_qual_vec.get(job.id)
+            qualitative_similarity = (
+                cosine_similarity(applicant_experience_vec, qual_vec)
+                if applicant_experience_vec is not None and qual_vec is not None
+                else 0.0
+            )
         experience, experience_reason = experience_match(
-            applicant_years, parse_required_years(job.experience_required)
+            applicant_years,
+            parse_required_years(job.experience_required),
+            qualitative_similarity,
         )
         education, education_reason = education_match(
             highest_education, job.minimum_education_attainment
@@ -228,6 +255,9 @@ async def generate_recommendations(
             applicant_id=applicant.id,
             scores=stored_scores,
             score=final_pct,
+            eligible=eligibility_matches(
+                getattr(applicant, "eligibility", None), getattr(job, "eligibility", None)
+            ),
             embedded_applicant=applicant_vec,
             embedded_job=job.embedding,
             key_matched=key_matched,

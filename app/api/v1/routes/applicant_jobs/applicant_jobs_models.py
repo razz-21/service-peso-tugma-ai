@@ -21,6 +21,11 @@ class ApplicantJob(Document):
     # Application-generated UUID primary key (stored as Mongo `_id`), matching
     # this codebase's MongoDB convention (see jobs/applicants models).
     id: UUID = Field(default_factory=uuid4)  # type: ignore[assignment]
+    # Foreign key to `applicants` (Applicant.id) — the applicant this record is
+    # for. Nullable so rows written before this field existed still load; used to
+    # cascade-delete an applicant's applicant-job records when the applicant is
+    # removed.
+    applicant_id: UUID | None = None
     # Foreign key to `jobs` (Job.id).
     job_id: UUID
     # Foreign key to `companies` (Company.id).

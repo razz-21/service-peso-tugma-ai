@@ -12,12 +12,18 @@ from .primary_requirements import (
     age_matches,
     applicant_age,
     civil_status_matches,
+    eligibility_matches,
     has_open_vacancy,
     meets_primary_requirements,
     parse_age_range,
     sex_matches,
 )
-from .profile import applicant_experience_years, applicant_to_text, job_to_text
+from .profile import (
+    applicant_experience_text,
+    applicant_experience_years,
+    applicant_to_text,
+    job_to_text,
+)
 from .scoring import (
     DEFAULT_WEIGHTS,
     MatchWeights,
@@ -26,6 +32,7 @@ from .scoring import (
     cosine_similarity,
     education_match,
     experience_match,
+    experience_requirement_terms,
     location_match,
     parse_required_years,
     skills_match,
@@ -37,6 +44,7 @@ __all__ = [
     "ScoreBreakdown",
     "age_matches",
     "applicant_age",
+    "applicant_experience_text",
     "applicant_experience_years",
     "applicant_to_text",
     "civil_status_matches",
@@ -44,7 +52,9 @@ __all__ = [
     "combined_score",
     "cosine_similarity",
     "education_match",
+    "eligibility_matches",
     "experience_match",
+    "experience_requirement_terms",
     "has_open_vacancy",
     "job_to_text",
     "meets_primary_requirements",

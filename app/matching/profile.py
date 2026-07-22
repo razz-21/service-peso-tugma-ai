@@ -66,6 +66,30 @@ def job_to_text(job: Job) -> str:
     return preprocess(_join(parts))
 
 
+def applicant_experience_text(applicant: Applicant) -> str:
+    """Preprocessed text of the applicant's experience and qualifications.
+
+    Concatenates work positions/companies and educational level/course — the
+    fields a free-text experience requirement (a role or a field of study) is
+    matched against semantically. Empty when the applicant has neither, which the
+    caller treats as "no evidence" for a qualitative requirement.
+    """
+    parts: list[str] = []
+    for experience in applicant.work_experience:
+        parts.append(_join([experience.position or "", experience.company or ""]))
+    education = applicant.educational_background
+    if education is not None:
+        parts.append(
+            _join(
+                [
+                    education.highest_education_level or "",
+                    education.course_program or "",
+                ]
+            )
+        )
+    return preprocess(_join(parts))
+
+
 def applicant_experience_years(applicant: Applicant) -> float:
     """Total years of work experience summed across the applicant's history.
 

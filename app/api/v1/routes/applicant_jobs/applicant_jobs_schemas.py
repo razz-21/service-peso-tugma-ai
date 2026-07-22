@@ -50,6 +50,7 @@ class ApplicantJobRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    applicant_id: UUID | None = None
     # Read responses expose the resolved records instead of the raw foreign keys.
     job: ApplicantJobJob | None = None
     company: ApplicantJobCompany | None = None

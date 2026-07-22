@@ -45,6 +45,7 @@ class RecommendedJobJob(BaseModel):
     age_range: str | None = None
     sex: str | None = None
     civil_status: list[str] = Field(default_factory=list)
+    eligibility: str | None = None
     # Resolved from the job's `company_id` by the read endpoints.
     company: RecommendedJobCompany | None = None
 
@@ -57,8 +58,9 @@ class RecommendedJobBase(BaseModel):
     applicant_id: UUID | None = None
     scores: RecommendationScores = Field(default_factory=RecommendationScores)
     score: int = Field(default=0, ge=0, le=100)
+    eligible: bool = True
     is_relevant: bool = False
-    status: RecommendedJobStatus = RecommendedJobStatus.REFERRED
+    status: RecommendedJobStatus | None = None
     embedded_applicant: list[float] = Field(default_factory=list)
     embedded_job: list[float] = Field(default_factory=list)
     key_matched: list[str] = Field(default_factory=list)
@@ -83,7 +85,7 @@ class RecommendedJobCreate(BaseModel):
     scores: RecommendationScores = Field(default_factory=RecommendationScores)
     score: int = Field(default=0, ge=0, le=100)
     is_relevant: bool = False
-    status: RecommendedJobStatus = RecommendedJobStatus.REFERRED
+    status: RecommendedJobStatus | None = None
     embedded_applicant: list[float] = Field(default_factory=list)
     embedded_job: list[float] = Field(default_factory=list)
     key_matched: list[str] = Field(default_factory=list)

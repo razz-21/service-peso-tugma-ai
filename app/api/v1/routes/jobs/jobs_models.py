@@ -34,6 +34,7 @@ class Job(Document):
     age_range: str | None = None
     sex: Sex | None = None
     civil_status: list[str] = Field(default_factory=list)
+    eligibility: str | None = None
     status: JobStatus = JobStatus.ACTIVE
     # Cached semantic embedding of the job's text (title, description, required
     # skills/experience/education), produced by the matching pipeline's embedding

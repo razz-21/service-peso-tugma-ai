@@ -74,7 +74,9 @@ def _applicant() -> SimpleNamespace:
         civil_status="Single",
         technical_skills=["Python"],
         preferred_work_location=[],
-        educational_background=SimpleNamespace(highest_education_level="Bachelor"),
+        educational_background=SimpleNamespace(
+            highest_education_level="Bachelor", course_program=None
+        ),
         work_experience=[],
     )
 

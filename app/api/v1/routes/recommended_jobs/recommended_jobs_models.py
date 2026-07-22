@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 class RecommendedJobStatus(StrEnum):
     REFERRED = "referred"
     INTERVIEW_SCHEDULED = "interview_scheduled"
+    HIRED = "hired"
     # NOTE: normalized spelling of the requested "widthdrawn".
     WITHDRAWN = "withdrawn"
     NOT_HIRED = "not_hired"
@@ -43,8 +44,17 @@ class RecommendedJob(Document):
     # combined score used to rank recommendations (Table 14 `score`). Derived from
     # `scores` and the workspace weights at generation time.
     score: int = Field(default=0, ge=0, le=100)
+    # Whether the applicant satisfies the job's `eligibility` requirement at
+    # generation time (see matching.eligibility_matches). A soft flag surfaced in
+    # the comparison view — it does not gate recommendation. Defaults True so
+    # records written before this field existed (and jobs with no requirement)
+    # read as eligible.
+    eligible: bool = True
     is_relevant: bool = False
-    status: RecommendedJobStatus = RecommendedJobStatus.REFERRED
+    # No default status: a fresh recommendation is unassessed. It gains a status
+    # only when an officer acts on it (referring the applicant sets REFERRED, then
+    # the status advances through the Human-in-the-Loop referral lifecycle).
+    status: RecommendedJobStatus | None = None
     embedded_applicant: list[float] = Field(default_factory=list)
     embedded_job: list[float] = Field(default_factory=list)
     key_matched: list[str] = Field(default_factory=list)

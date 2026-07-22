@@ -33,6 +33,7 @@ from app.matching.scoring import (
     cosine_similarity,
     education_match,
     experience_match,
+    experience_requirement_terms,
     location_match,
     parse_required_years,
     skills_match,
@@ -112,6 +113,45 @@ def test_experience_below_requirement_is_ratio() -> None:
 
 def test_experience_no_requirement_is_full_score() -> None:
     assert experience_match(0.0, None) == (1.0, None)
+
+
+def test_experience_requirement_terms_extracts_qualitative_signal() -> None:
+    # Purely numeric / filler requirements have nothing qualitative to match.
+    assert experience_requirement_terms("3 years experience") is None
+    assert experience_requirement_terms("Minimum 2 yrs of related work") is None
+    assert experience_requirement_terms(None) is None
+    assert experience_requirement_terms("") is None
+    # Field/role wording survives, with any years phrase stripped out.
+    terms = experience_requirement_terms("2+ years as an Electrical Engineer")
+    assert terms is not None and "Electrical Engineer" in terms
+    assert "years" not in terms
+    assert (
+        experience_requirement_terms(
+            "Engineering Graduate preferably Electrical Engineering, Mechanical Engineering"
+        )
+        == "Engineering Graduate preferably Electrical Engineering, Mechanical Engineering"
+    )
+
+
+def test_experience_qualitative_low_similarity_is_not_met() -> None:
+    # A front-end developer against an engineering requirement: low cosine ->
+    # near-zero sub-score (the reported bug — previously always 1.0 / "met").
+    score, reason = experience_match(3.0, None, qualitative_similarity=0.15)
+    assert score == 0.0
+    assert reason is None
+
+
+def test_experience_qualitative_high_similarity_is_met() -> None:
+    score, reason = experience_match(0.0, None, qualitative_similarity=0.60)
+    assert score == 1.0
+    assert reason is None
+
+
+def test_experience_combines_years_and_qualitative() -> None:
+    # Years met (1.0) averaged with calibrated qualitative (0.35 -> 0.5) = 0.75.
+    score, reason = experience_match(5.0, 3.0, qualitative_similarity=0.35)
+    assert math.isclose(score, 0.75)
+    assert reason is not None
 
 
 # --- Education -------------------------------------------------------------
