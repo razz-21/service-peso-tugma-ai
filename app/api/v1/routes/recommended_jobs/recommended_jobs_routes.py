@@ -1,0 +1,172 @@
+from typing import Annotated
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+
+from app.api.deps import get_current_user, get_current_workspace_id
+from app.api.v1.routes.users.users_models import User
+
+from ..applicants import applicants_service
+from ..jobs import jobs_service
+from ..jobs.jobs_models import Job
+from ..users import users_service
+from . import recommended_jobs_service
+from .recommended_jobs_models import RecommendedJob, RecommendedJobStatus
+from .recommended_jobs_schemas import (
+    RecommendedJobCreate,
+    RecommendedJobJob,
+    RecommendedJobList,
+    RecommendedJobPatch,
+    RecommendedJobRead,
+)
+
+router = APIRouter()
+
+
+async def _require_job(job_id: UUID, workspace_id: UUID) -> Job:
+    # Enforce the `job_id` foreign key within the workspace: reject references to
+    # jobs that don't exist (or live in another tenant) rather than allowing
+    # orphaned/cross-workspace recommendations. Returns the job so the caller can
+    # embed it in the response without a second lookup.
+    job = await jobs_service.get_job(job_id, workspace_id=workspace_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Job not found",
+        )
+    return job
+
+
+async def _require_applicant(applicant_id: UUID, workspace_id: UUID) -> None:
+    # Enforce the `applicant_id` foreign key within the workspace: reject
+    # references to applicants that don't exist (or live in another tenant),
+    # so a recommendation can't be orphaned from its applicant.
+    if await applicants_service.get_applicant(applicant_id, workspace_id=workspace_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Applicant not found",
+        )
+
+
+async def _require_assessor(user_id: UUID) -> None:
+    # Enforce the `assessed_by` foreign key: reject references to users that
+    # don't exist.
+    if await users_service.get_user(user_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Assessor (user) not found",
+        )
+
+
+def _to_read(recommended_job: RecommendedJob, job: Job | None) -> RecommendedJobRead:
+    # Resolve the stored `job_id` into the embedded `job` summary.
+    read = RecommendedJobRead.model_validate(recommended_job)
+    read.job = RecommendedJobJob.model_validate(job) if job else None
+    return read
+
+
+@router.post("", response_model=RecommendedJobRead, status_code=status.HTTP_201_CREATED)
+async def create_recommended_job(
+    data: RecommendedJobCreate,
+    workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> RecommendedJobRead:
+    job = await _require_job(data.job_id, workspace_id)
+    await _require_applicant(data.applicant_id, workspace_id)
+    # `assessed_by` defaults to the authenticated user when the client omits it.
+    assessed_by = data.assessed_by or current_user.id
+    if data.assessed_by is not None:
+        await _require_assessor(data.assessed_by)
+    recommended_job = await recommended_jobs_service.create_recommended_job(
+        data, workspace_id=workspace_id, assessed_by=assessed_by
+    )
+    return _to_read(recommended_job, job)
+
+
+@router.get("", response_model=RecommendedJobList)
+async def list_recommended_jobs(
+    workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    job_id: Annotated[UUID | None, Query()] = None,
+    applicant_id: Annotated[UUID | None, Query()] = None,
+    status: Annotated[RecommendedJobStatus | None, Query()] = None,
+    is_relevant: Annotated[bool | None, Query()] = None,
+    assessed_by: Annotated[UUID | None, Query()] = None,
+) -> RecommendedJobList:
+    recommendations, total = await recommended_jobs_service.list_recommended_jobs(
+        limit=limit,
+        offset=offset,
+        job_id=job_id,
+        applicant_id=applicant_id,
+        status=status,
+        is_relevant=is_relevant,
+        assessed_by=assessed_by,
+        workspace_id=workspace_id,
+    )
+    jobs = await recommended_jobs_service.get_jobs_map(recommendations, workspace_id=workspace_id)
+    return RecommendedJobList(
+        total=total,
+        limit=limit,
+        offset=offset,
+        items=[_to_read(rec, jobs.get(rec.job_id)) for rec in recommendations],
+    )
+
+
+@router.get("/{recommended_job_id}", response_model=RecommendedJobRead)
+async def get_recommended_job(
+    recommended_job_id: UUID,
+    workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+) -> RecommendedJobRead:
+    recommended_job = await recommended_jobs_service.get_recommended_job(
+        recommended_job_id, workspace_id=workspace_id
+    )
+    if recommended_job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Recommended job not found"
+        )
+    job = await jobs_service.get_job(recommended_job.job_id, workspace_id=workspace_id)
+    return _to_read(recommended_job, job)
+
+
+@router.patch("/{recommended_job_id}", response_model=RecommendedJobRead)
+async def update_recommended_job(
+    recommended_job_id: UUID,
+    data: RecommendedJobPatch,
+    workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+) -> RecommendedJobRead:
+    recommended_job = await recommended_jobs_service.get_recommended_job(
+        recommended_job_id, workspace_id=workspace_id
+    )
+    if recommended_job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Recommended job not found"
+        )
+    if data.job_id is not None:
+        await _require_job(data.job_id, workspace_id)
+    if data.applicant_id is not None:
+        await _require_applicant(data.applicant_id, workspace_id)
+    if data.assessed_by is not None:
+        await _require_assessor(data.assessed_by)
+    recommended_job = await recommended_jobs_service.update_recommended_job(recommended_job, data)
+    job = await jobs_service.get_job(recommended_job.job_id, workspace_id=workspace_id)
+    return _to_read(recommended_job, job)
+
+
+@router.delete("/{recommended_job_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_recommended_job(
+    recommended_job_id: UUID,
+    workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+) -> None:
+    recommended_job = await recommended_jobs_service.get_recommended_job(
+        recommended_job_id, workspace_id=workspace_id
+    )
+    if recommended_job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Recommended job not found"
+        )
+    if not await recommended_jobs_service.delete_recommended_job(recommended_job):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete recommended job",
+        )

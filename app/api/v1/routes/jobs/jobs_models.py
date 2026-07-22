@@ -32,6 +32,13 @@ class Job(Document):
     sex: Sex | None = None
     civil_status: list[str] = Field(default_factory=list)
     status: JobStatus = JobStatus.ACTIVE
+    # Cached semantic embedding of the job's text (title, description, required
+    # skills/experience/education), produced by the matching pipeline's embedding
+    # model. Persisted so the Top-N recommender doesn't re-embed every job on each
+    # run; recompute when the job's text fields change. Empty until first computed.
+    # Kept off the read/write schemas (JobCreate/JobPatch/JobRead) so it stays an
+    # internal cache rather than a client-facing field.
+    embedding: list[float] = Field(default_factory=list)
     # Foreign key to `companies` (Company.id). Stored as a UUID reference rather
     # than a Mongo DBRef so it round-trips like any other scalar field.
     company_id: UUID

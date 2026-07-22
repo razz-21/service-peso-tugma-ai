@@ -8,6 +8,7 @@ from app.api.v1.routes import (
     health,
     jobs,
     me,
+    recommended_jobs,
     users,
     workspaces,
 )
@@ -33,4 +34,10 @@ api_router.include_router(
 api_router.include_router(jobs.router, prefix="/jobs", tags=["jobs"], dependencies=auth_required)
 api_router.include_router(
     applicants.router, prefix="/applicants", tags=["applicants"], dependencies=auth_required
+)
+api_router.include_router(
+    recommended_jobs.router,
+    prefix="/recommended-jobs",
+    tags=["recommended_jobs"],
+    dependencies=auth_required,
 )
