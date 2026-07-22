@@ -24,7 +24,7 @@ async def register(data: UserCreate) -> UserRead:
             detail="Email already registered",
         )
     user = await user_service.create_user(data)
-    return UserRead.model_validate(user)
+    return await user_service.build_user_read(user)
 
 
 @router.post("/login", response_model=UserRead)
@@ -47,7 +47,7 @@ async def login(
     auth_service.set_auth_cookies(
         response, auth_service.issue_tokens(str(user.id)), remember=remember_me
     )
-    return UserRead.model_validate(user)
+    return await user_service.build_user_read(user)
 
 
 @router.post("/refresh", response_model=UserRead)
@@ -84,7 +84,7 @@ async def refresh(
     auth_service.set_auth_cookies(
         response, auth_service.issue_tokens(str(user.id)), remember=pta_remember == "1"
     )
-    return UserRead.model_validate(user)
+    return await user_service.build_user_read(user)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

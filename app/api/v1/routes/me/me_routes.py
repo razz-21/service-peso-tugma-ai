@@ -12,7 +12,7 @@ router = APIRouter()
 
 @router.get("", response_model=UserRead)
 async def read_me(current_user: Annotated[User, Depends(get_current_user)]) -> UserRead:
-    return UserRead.model_validate(current_user)
+    return await user_service.build_user_read(current_user)
 
 
 @router.patch("", response_model=UserRead)
@@ -31,4 +31,4 @@ async def update_me(
         )
 
     user = await user_service.update_user(current_user, data)
-    return UserRead.model_validate(user)
+    return await user_service.build_user_read(user)

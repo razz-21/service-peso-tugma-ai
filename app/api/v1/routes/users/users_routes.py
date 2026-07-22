@@ -17,7 +17,7 @@ async def create_user(data: UserCreate) -> UserRead:
             detail="Email already registered",
         )
     user = await users_service.create_user(data)
-    return UserRead.model_validate(user)
+    return await users_service.build_user_read(user)
 
 
 @router.get("", response_model=UserList)
@@ -26,13 +26,16 @@ async def list_users(
     offset: Annotated[int, Query(ge=0)] = 0,
     q: Annotated[str, Query()] = None,
     role: Annotated[str, Query()] = None,
+    workspace_id: Annotated[UUID | None, Query()] = None,
 ) -> UserList:
-    users, total = await users_service.list_users(limit=limit, offset=offset, q=q, role=role)
+    users, total = await users_service.list_users(
+        limit=limit, offset=offset, q=q, role=role, workspace_id=workspace_id
+    )
     return UserList(
         total=total,
         limit=limit,
         offset=offset,
-        items=[UserRead.model_validate(user) for user in users],
+        items=users,
     )
 
 
@@ -41,7 +44,7 @@ async def get_user(user_id: UUID) -> UserRead:
     user = await users_service.get_user(user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    return UserRead.model_validate(user)
+    return await users_service.build_user_read(user)
 
 
 @router.patch("/{user_id}", response_model=UserRead)
@@ -61,7 +64,7 @@ async def update_user(user_id: UUID, data: UserPatch) -> UserRead:
         )
 
     user = await users_service.update_user(user, data)
-    return UserRead.model_validate(user)
+    return await users_service.build_user_read(user)
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)

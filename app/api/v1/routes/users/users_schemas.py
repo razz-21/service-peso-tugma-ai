@@ -6,6 +6,15 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from .users_models import UserRole, UserStatus
 
 
+class WorkspaceRef(BaseModel):
+    """Lightweight workspace reference embedded in user reads."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+
+
 class UserBase(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -15,7 +24,6 @@ class UserBase(BaseModel):
     role: UserRole = UserRole.OFFICER
     status: UserStatus = UserStatus.ACTIVE
     avatar: str | None = None
-    workspace_id: UUID | None = None
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
@@ -29,6 +37,7 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     password: str = Field(min_length=8, max_length=128)
+    workspace_id: UUID | None = None
 
 
 class UserPatch(BaseModel):
@@ -38,6 +47,7 @@ class UserPatch(BaseModel):
     role: UserRole | None = None
     status: UserStatus | None = None
     avatar: str | None = None
+    workspace_id: UUID | None = None
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
@@ -52,7 +62,7 @@ class MePatch(BaseModel):
 
 
 class UserRead(UserBase):
-    pass
+    workspace: WorkspaceRef | None = None
 
 
 class UserList(BaseModel):

@@ -1,12 +1,31 @@
 import re
 from uuid import UUID
 
-from beanie.operators import Or, RegEx
+from beanie.operators import In, Or, RegEx
 
+from app.api.v1.routes.workspaces.workspaces_models import Workspace
 from app.core.security import hash_password, verify_password
 
 from .users_models import User, UserRole
-from .users_schemas import MePatch, UserCreate, UserPatch
+from .users_schemas import MePatch, UserCreate, UserPatch, UserRead, WorkspaceRef
+
+
+def _to_read(user: User, workspace: Workspace | None) -> UserRead:
+    """Build a `UserRead`, embedding the user's workspace (id + name)."""
+    return UserRead.model_validate(
+        {
+            **user.model_dump(),
+            "workspace": WorkspaceRef.model_validate(workspace) if workspace else None,
+        }
+    )
+
+
+async def build_user_read(user: User) -> UserRead:
+    """Read model for a single user, resolving its workspace reference."""
+    workspace = None
+    if user.workspace_id is not None:
+        workspace = await Workspace.get(user.workspace_id)
+    return _to_read(user, workspace)
 
 
 async def get_user(user_id: UUID) -> User | None:
@@ -28,17 +47,38 @@ async def create_user(data: UserCreate) -> User:
 
 
 async def list_users(
-    limit: int, offset: int, q: str | None = None, role: UserRole | None = None
-) -> tuple[list[User], int]:
+    limit: int,
+    offset: int,
+    q: str | None = None,
+    role: UserRole | None = None,
+    workspace_id: UUID | None = None,
+) -> tuple[list[UserRead], int]:
     query = User.find_all()
     if q is not None:
         pattern = re.escape(q)
         query = query.find(Or(RegEx(User.fullname, pattern, "i"), RegEx(User.email, pattern, "i")))
     if role is not None:
         query = query.find(User.role == role)
+    if workspace_id is not None:
+        query = query.find(User.workspace_id == workspace_id)
     total = await query.count()
     users = await query.sort("-created_at").skip(offset).limit(limit).to_list()
-    return users, total
+
+    # Resolve each user's workspace name in one batched query (avoids N+1).
+    workspace_ids = {user.workspace_id for user in users if user.workspace_id is not None}
+    workspaces_by_id: dict[UUID, Workspace] = {}
+    if workspace_ids:
+        workspaces = await Workspace.find(In(Workspace.id, list(workspace_ids))).to_list()
+        workspaces_by_id = {workspace.id: workspace for workspace in workspaces}
+
+    items = [
+        _to_read(
+            user,
+            workspaces_by_id.get(user.workspace_id) if user.workspace_id is not None else None,
+        )
+        for user in users
+    ]
+    return items, total
 
 
 async def update_user(user: User, data: UserPatch | MePatch) -> User:
