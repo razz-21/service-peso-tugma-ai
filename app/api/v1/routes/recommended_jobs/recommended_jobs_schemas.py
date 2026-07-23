@@ -21,6 +21,20 @@ class RecommendedJobCompany(BaseModel):
     avatar: str | None = None
 
 
+class RecommendedJobUser(BaseModel):
+    """Assessor summary embedded under a recommendation (resolves `assessed_by`).
+
+    `name` reads from the User document's `fullname` attribute so read responses
+    expose `{ id, name, avatar }` — the officer who referred/assessed the match.
+    """
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: UUID
+    name: str = Field(validation_alias="fullname")
+    avatar: str | None = None
+
+
 class RecommendedJobJob(BaseModel):
     """Embedded job summary for recommended-job read responses.
 
@@ -113,6 +127,10 @@ class RecommendedJobRead(RecommendedJobBase):
     # from output, while `job` carries the embedded summary.
     job_id: UUID = Field(exclude=True)
     job: RecommendedJobJob | None = None
+    # Same for the assessor: the raw `assessed_by` user id is hidden, and the
+    # resolved `{ id, name, avatar }` summary is exposed as `assessor`.
+    assessed_by: UUID = Field(exclude=True)
+    assessor: RecommendedJobUser | None = None
 
 
 class RecommendedJobList(BaseModel):

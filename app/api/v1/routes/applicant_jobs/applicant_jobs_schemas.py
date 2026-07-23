@@ -46,6 +46,30 @@ class ApplicantJobUser(BaseModel):
     avatar: str | None = None
 
 
+class ApplicantJobCreate(BaseModel):
+    """Request body for referring a job to an applicant.
+
+    `company_id` is not accepted from the client — it is derived from the job so
+    the referral can't be pointed at a company the job doesn't belong to.
+    `assigned_by` defaults to the authenticated user when omitted.
+    """
+
+    applicant_id: UUID
+    job_id: UUID
+    assigned_by: UUID | None = None
+    match_scores: RecommendationScores = Field(default_factory=RecommendationScores)
+
+
+class ApplicantJobUpdate(BaseModel):
+    """Request body for advancing a referral through its lifecycle.
+
+    Changing the status may adjust the job's open-vacancy count (releasing a seat
+    on withdrawn / not hired, re-consuming one when moved back into play).
+    """
+
+    status: ApplicantJobStatus
+
+
 class ApplicantJobRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

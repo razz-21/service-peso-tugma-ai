@@ -23,6 +23,7 @@ from .recommended_jobs_schemas import (
     RecommendedJobList,
     RecommendedJobPatch,
     RecommendedJobRead,
+    RecommendedJobUser,
 )
 
 router = APIRouter()
@@ -64,11 +65,16 @@ async def _require_assessor(user_id: UUID) -> None:
 
 
 def _to_read(
-    recommended_job: RecommendedJob, job: Job | None, company: Company | None = None
+    recommended_job: RecommendedJob,
+    job: Job | None,
+    company: Company | None = None,
+    user: User | None = None,
 ) -> RecommendedJobRead:
-    # Resolve the stored `job_id` into the embedded `job` summary, and the job's
-    # `company_id` into the nested `company` summary ({ id, name, avatar }).
+    # Resolve the stored `job_id` into the embedded `job` summary, the job's
+    # `company_id` into the nested `company` summary, and `assessed_by` into the
+    # `assessor` summary ({ id, name, avatar }).
     read = RecommendedJobRead.model_validate(recommended_job)
+    read.assessor = RecommendedJobUser.model_validate(user) if user else None
     if job is None:
         read.job = None
         return read
@@ -82,11 +88,13 @@ def _to_read_mapped(
     recommended_job: RecommendedJob,
     jobs: dict[UUID, Job],
     companies: dict[UUID, Company],
+    users: dict[UUID, User],
 ) -> RecommendedJobRead:
-    # Build a read from pre-fetched job/company maps (batched list responses).
+    # Build a read from pre-fetched job/company/user maps (batched list responses).
     job = jobs.get(recommended_job.job_id)
     company = companies.get(job.company_id) if job else None
-    return _to_read(recommended_job, job, company)
+    user = users.get(recommended_job.assessed_by)
+    return _to_read(recommended_job, job, company, user)
 
 
 @router.post("", response_model=RecommendedJobRead, status_code=status.HTTP_201_CREATED)
@@ -105,7 +113,8 @@ async def create_recommended_job(
         data, workspace_id=workspace_id, assessed_by=assessed_by
     )
     company = await companies_service.get_company(job.company_id, workspace_id=workspace_id)
-    return _to_read(recommended_job, job, company)
+    user = await users_service.get_user(recommended_job.assessed_by)
+    return _to_read(recommended_job, job, company, user)
 
 
 @router.post(
@@ -131,7 +140,8 @@ async def generate_recommendations(
     )
     jobs = await recommended_jobs_service.get_jobs_map(recommendations, workspace_id=workspace_id)
     companies = await jobs_service.get_companies_map(list(jobs.values()), workspace_id=workspace_id)
-    return [_to_read_mapped(rec, jobs, companies) for rec in recommendations]
+    users = await recommended_jobs_service.get_users_map(recommendations)
+    return [_to_read_mapped(rec, jobs, companies, users) for rec in recommendations]
 
 
 @router.get("", response_model=RecommendedJobList)
@@ -157,11 +167,12 @@ async def list_recommended_jobs(
     )
     jobs = await recommended_jobs_service.get_jobs_map(recommendations, workspace_id=workspace_id)
     companies = await jobs_service.get_companies_map(list(jobs.values()), workspace_id=workspace_id)
+    users = await recommended_jobs_service.get_users_map(recommendations)
     return RecommendedJobList(
         total=total,
         limit=limit,
         offset=offset,
-        items=[_to_read_mapped(rec, jobs, companies) for rec in recommendations],
+        items=[_to_read_mapped(rec, jobs, companies, users) for rec in recommendations],
     )
 
 
@@ -183,7 +194,8 @@ async def get_recommended_job(
         if job is not None
         else None
     )
-    return _to_read(recommended_job, job, company)
+    user = await users_service.get_user(recommended_job.assessed_by)
+    return _to_read(recommended_job, job, company, user)
 
 
 @router.patch("/{recommended_job_id}", response_model=RecommendedJobRead)
@@ -212,7 +224,8 @@ async def update_recommended_job(
         if job is not None
         else None
     )
-    return _to_read(recommended_job, job, company)
+    user = await users_service.get_user(recommended_job.assessed_by)
+    return _to_read(recommended_job, job, company, user)
 
 
 @router.delete("/{recommended_job_id}", status_code=status.HTTP_204_NO_CONTENT)

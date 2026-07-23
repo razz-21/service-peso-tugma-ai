@@ -27,6 +27,7 @@ from app.matching.scoring import (
 )
 
 from ..jobs.jobs_models import Job, JobStatus
+from ..users.users_models import User
 from .recommended_jobs_models import (
     RecommendationScores,
     RecommendedJob,
@@ -61,6 +62,16 @@ async def get_jobs_map(
         return {}
     jobs = await Job.find(In(Job.id, ids), Job.workspace_id == workspace_id).to_list()
     return {job.id: job for job in jobs}
+
+
+async def get_users_map(recommendations: list[RecommendedJob]) -> dict[UUID, User]:
+    # Batch-resolve the `assessed_by` foreign keys (the assessor/referrer) for a
+    # page of recommendations. Users are not workspace-scoped.
+    ids = list({rec.assessed_by for rec in recommendations})
+    if not ids:
+        return {}
+    users = await User.find(In(User.id, ids)).to_list()
+    return {user.id: user for user in users}
 
 
 async def create_recommended_job(
@@ -152,10 +163,10 @@ async def generate_recommendations(
     Embeds the applicant profile, scores every active job (semantic cosine +
     rule-based skills/experience/education/location) with the workspace's weights,
     ranks by the combined MatchScore, and stores the Top-K as RecommendedJob rows.
-    Regenerating replaces the applicant's recommendations wholesale: all existing
-    rows for the applicant are deleted first, then the fresh Top-K is inserted (so
-    any prior Human-in-the-Loop assessments are discarded). Returns the
-    recommendations in rank order.
+    Regenerating replaces only the applicant's *unreferred* recommendations: rows
+    the applicant has already been referred to (status set) are preserved, and
+    their jobs are excluded from the fresh Top-K so they are never duplicated.
+    Returns every current recommendation (preserved + fresh) in rank order.
     """
     workspace_id = workspace.id
     weights = _weights_for(workspace)
@@ -176,17 +187,39 @@ async def generate_recommendations(
         else None
     )
 
+    # Preserve recommendations the applicant has already been referred to (status
+    # set): a regenerate must not discard referral history/state. Only unreferred
+    # rows (status is None) are replaced. Referred jobs are also excluded from the
+    # fresh candidate pool below, so we never insert a duplicate row for a job the
+    # applicant is already referred to.
+    existing = await RecommendedJob.find(
+        RecommendedJob.applicant_id == applicant.id,
+        RecommendedJob.workspace_id == workspace_id,
+    ).to_list()
+    preserved = [rec for rec in existing if rec.status is not None]
+    stale_ids = [rec.id for rec in existing if rec.status is None]
+    preserved_job_ids = {rec.job_id for rec in preserved}
+
     jobs = await Job.find(
         Job.workspace_id == workspace_id, Job.status == JobStatus.ACTIVE
     ).to_list()
-    if not jobs:
-        return []
 
     # Hard primary-requirement gate: drop jobs whose primary requirements the
     # applicant categorically fails (no open vacancy, or a specified age range /
-    # sex / civil status the applicant fails) before scoring. An emptied list
-    # still flows through so a regenerate clears the applicant's stale recommendations.
-    jobs = [job for job in jobs if meets_primary_requirements(applicant, job)]
+    # sex / civil status the applicant fails) before scoring. Also drop jobs the
+    # applicant is already referred to, which are kept via `preserved`.
+    jobs = [
+        job
+        for job in jobs
+        if job.id not in preserved_job_ids and meets_primary_requirements(applicant, job)
+    ]
+    if not jobs:
+        # No fresh candidates: clear the stale (unreferred) rows and return the
+        # preserved referrals in rank order.
+        if stale_ids:
+            await RecommendedJob.find(In(RecommendedJob.id, stale_ids)).delete()
+        return sorted(preserved, key=lambda rec: rec.score, reverse=True)
+
     await _ensure_job_embeddings(jobs)
 
     # Embed each job's qualitative experience requirement (field/role wording) in
@@ -243,12 +276,10 @@ async def generate_recommendations(
     scored.sort(key=lambda item: item[2], reverse=True)
     top = scored[:top_k]
 
-    # Regenerate = replace: drop every existing recommendation for this applicant
-    # in the workspace, then insert the fresh Top-K.
-    await RecommendedJob.find(
-        RecommendedJob.applicant_id == applicant.id,
-        RecommendedJob.workspace_id == workspace_id,
-    ).delete()
+    # Regenerate = replace only the unreferred recommendations; the referred rows
+    # in `preserved` are kept so referral history/state survives a regenerate.
+    if stale_ids:
+        await RecommendedJob.find(In(RecommendedJob.id, stale_ids)).delete()
 
     results: list[RecommendedJob] = []
     for job, stored_scores, final_pct, key_matched in top:
@@ -269,4 +300,6 @@ async def generate_recommendations(
         await rec.insert()
         results.append(rec)
 
-    return results
+    # Return every current recommendation — preserved referrals plus the fresh
+    # Top-K — in rank order, so the client reflects the full, deduplicated set.
+    return sorted([*preserved, *results], key=lambda rec: rec.score, reverse=True)

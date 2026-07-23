@@ -30,14 +30,28 @@ class _FakeQuery:
         return self._items
 
 
-class _FakeDeleteQuery:
-    """Stand-in for `RecommendedJob.find(...)` supporting `delete()`."""
+class _FakeRecQuery:
+    """Stand-in for `RecommendedJob.find(...)` supporting `to_list` + `delete`.
 
-    def __init__(self, deleted_flag: list[bool]) -> None:
+    `to_list` returns the applicant's existing recommendations (so the service
+    can partition them into preserved/stale); `delete` records that a stale-row
+    cleanup ran.
+    """
+
+    def __init__(self, existing: list[object], deleted_flag: list[bool]) -> None:
+        self._existing = existing
         self._deleted_flag = deleted_flag
+
+    async def to_list(self) -> list[object]:
+        return self._existing
 
     async def delete(self) -> None:
         self._deleted_flag.append(True)
+
+
+def _existing_rec(*, job_id: UUID, status: str | None, score: int = 50) -> SimpleNamespace:
+    """A minimal persisted recommendation the service may preserve or clear."""
+    return SimpleNamespace(id=uuid4(), job_id=job_id, status=status, score=score)
 
 
 def _job(
@@ -98,16 +112,23 @@ def _workspace() -> SimpleNamespace:
 class _Pipeline(SimpleNamespace):
     inserted: list[object]
     deleted: list[bool]
+    existing: list[object]
 
 
 @pytest.fixture
 def stub_pipeline(monkeypatch: pytest.MonkeyPatch) -> _Pipeline:
-    """Stub embeddings + the `RecommendedJob` document; capture inserts/deletes."""
+    """Stub embeddings + the `RecommendedJob` document; capture inserts/deletes.
+
+    `existing` seeds the applicant's prior recommendations returned by `find`;
+    tests append to it to exercise the preserve-referred / clear-stale paths.
+    """
     inserted: list[object] = []
     deleted: list[bool] = []
+    existing: list[object] = []
 
     class _FakeRecommendedJob:
-        # Class-level query-field stand-ins for the regenerate delete expression.
+        # Class-level query-field stand-ins for the find/delete expressions.
+        id = object()
         applicant_id = object()
         workspace_id = object()
 
@@ -115,8 +136,8 @@ def stub_pipeline(monkeypatch: pytest.MonkeyPatch) -> _Pipeline:
             self.__dict__.update(kwargs)
 
         @staticmethod
-        def find(*_a: object, **_k: object) -> _FakeDeleteQuery:
-            return _FakeDeleteQuery(deleted)
+        def find(*_a: object, **_k: object) -> _FakeRecQuery:
+            return _FakeRecQuery(existing, deleted)
 
         async def insert(self) -> None:
             inserted.append(self)
@@ -128,7 +149,7 @@ def stub_pipeline(monkeypatch: pytest.MonkeyPatch) -> _Pipeline:
     monkeypatch.setattr(svc, "job_to_text", lambda _j: "job text")
     monkeypatch.setattr(svc, "applicant_experience_years", lambda _a: 3.0)
 
-    return _Pipeline(inserted=inserted, deleted=deleted)
+    return _Pipeline(inserted=inserted, deleted=deleted, existing=existing)
 
 
 def _patch_jobs(monkeypatch: pytest.MonkeyPatch, jobs: list[object]) -> None:
@@ -180,7 +201,7 @@ async def test_generate_keeps_all_qualifying_jobs(
     assert {rec.job_id for rec in results} == {job.id for job in jobs}
 
 
-async def test_generate_with_no_qualifying_jobs_clears_recommendations(
+async def test_generate_with_no_qualifying_jobs_clears_unreferred(
     monkeypatch: pytest.MonkeyPatch, stub_pipeline: _Pipeline
 ) -> None:
     applicant = _applicant()  # 30 years old
@@ -189,6 +210,8 @@ async def test_generate_with_no_qualifying_jobs_clears_recommendations(
         _job(title="No seats", no_of_vacancies=0),
     ]
     _patch_jobs(monkeypatch, jobs)
+    # A prior unreferred recommendation exists and should be cleared.
+    stub_pipeline.existing.append(_existing_rec(job_id=uuid4(), status=None))
 
     results = await svc.generate_recommendations(
         applicant, _workspace(), assessed_by=uuid4(), top_k=5
@@ -196,5 +219,28 @@ async def test_generate_with_no_qualifying_jobs_clears_recommendations(
 
     assert results == []
     assert stub_pipeline.inserted == []  # nothing inserted
-    # Regenerate still wipes the applicant's previous recommendations.
+    # The stale (unreferred) recommendation is cleared.
     assert stub_pipeline.deleted == [True]
+
+
+async def test_generate_preserves_referred_and_excludes_their_jobs(
+    monkeypatch: pytest.MonkeyPatch, stub_pipeline: _Pipeline
+) -> None:
+    applicant = _applicant()
+    referred_job = _job(title="Already referred")
+    fresh_job = _job(title="Fresh")
+    _patch_jobs(monkeypatch, [referred_job, fresh_job])
+    # The applicant is already referred to `referred_job`.
+    referred_rec = _existing_rec(job_id=referred_job.id, status="referred", score=90)
+    stub_pipeline.existing.append(referred_rec)
+
+    results = await svc.generate_recommendations(
+        applicant, _workspace(), assessed_by=uuid4(), top_k=5
+    )
+
+    # Referred one is preserved, the fresh one is generated, and the referred
+    # job is not duplicated in the Top-K.
+    assert {rec.job_id for rec in results} == {referred_job.id, fresh_job.id}
+    assert {rec.job_id for rec in stub_pipeline.inserted} == {fresh_job.id}
+    # The preserved row is returned by identity, not re-created.
+    assert referred_rec in results
