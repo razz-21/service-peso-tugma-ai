@@ -98,6 +98,29 @@ class WorkExperience(BaseModel):
         return _coerce_isoformat(value)
 
 
+class ApplicantFile(BaseModel):
+    """A file uploaded for an applicant (e.g. a resume), stored as an embedded
+    document rather than a separate collection — so it needs no `init_beanie`
+    registration, matching the other embedded sub-documents above.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID = Field(default_factory=uuid4)
+    filename: str
+    size: int
+    content_type: str
+    # Backend-relative reference to the stored bytes (local path, GridFS id, or
+    # object key, depending on the storage backend).
+    storage_ref: str
+    uploaded_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+    @field_validator("uploaded_at", mode="before")
+    @classmethod
+    def _to_isoformat(cls, value: object) -> object:
+        return _coerce_isoformat(value)
+
+
 class Applicant(Document):
     # Application-generated UUID primary key (stored as Mongo `_id`), matching
     # this codebase's MongoDB convention (see companies/jobs models).
@@ -126,6 +149,11 @@ class Applicant(Document):
     eligibility: list[Eligibility] = Field(default_factory=list)
     work_experience: list[WorkExperience] = Field(default_factory=list)
     technical_skills: list[str] = Field(default_factory=list)
+    # Files uploaded for this applicant (resume + supporting docs), embedded.
+    files: list[ApplicantFile] = Field(default_factory=list)
+    # Raw text extracted from the uploaded resume, persisted so the matcher can
+    # embed it (fed into `applicant_to_text`). Internal — not exposed in reads.
+    resume_text: str | None = None
     # Owning workspace (Workspace.id). Set from the session on creation; scopes
     # the record to a single tenant.
     workspace_id: UUID

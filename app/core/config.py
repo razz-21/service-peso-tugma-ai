@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     # first use by sentence-transformers and cached locally thereafter.
     EMBEDDING_MODEL_NAME: str = "sentence-transformers/all-MiniLM-L12-v2"
 
+    # Directory where uploaded applicant files (resumes) are stored on disk.
+    # Relative paths resolve against the service's working directory.
+    UPLOAD_DIR: str = "uploads"
+
     CORS_ORIGINS: str = "http://localhost:3000"
 
     MONGODB_USERNAME: str = "username"

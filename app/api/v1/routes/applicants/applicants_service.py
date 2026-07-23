@@ -1,11 +1,16 @@
 import re
 from datetime import UTC, datetime
-from uuid import UUID
+from pathlib import Path
+from uuid import UUID, uuid4
 
 from beanie.operators import Or, RegEx
 
-from .applicants_models import Applicant
-from .applicants_schemas import ApplicantCreate, ApplicantPatch
+from app.core.config import settings
+from app.matching.extraction import extract_text
+
+from .applicants_extraction import parse_resume
+from .applicants_models import Applicant, ApplicantFile
+from .applicants_schemas import ApplicantCreate, ApplicantPatch, ResumeExtraction
 
 
 async def get_applicant(applicant_id: UUID, workspace_id: UUID) -> Applicant | None:
@@ -48,6 +53,51 @@ async def update_applicant(applicant: Applicant, data: ApplicantPatch) -> Applic
     changes = data.model_dump(exclude_unset=True)
     for field in changes:
         setattr(applicant, field, getattr(data, field))
+    applicant.updated_at = datetime.now(UTC).isoformat()
+    await applicant.save()
+    return applicant
+
+
+def extract_resume(pdf_bytes: bytes) -> ResumeExtraction:
+    """Acquire text from a resume PDF and parse it into structured fields.
+
+    Stateless — used by `POST /applicants/extract` to prefill the create form.
+    Raises `app.matching.extraction.ExtractionError` for corrupt/encrypted PDFs.
+    """
+    raw_text, meta = extract_text(pdf_bytes)
+    return parse_resume(raw_text, meta)
+
+
+async def add_applicant_file(
+    applicant: Applicant,
+    *,
+    filename: str,
+    content_type: str,
+    data: bytes,
+    resume_text: str | None,
+) -> Applicant:
+    """Persist an uploaded file for the applicant and record the raw resume text.
+
+    Stores the bytes on disk under `UPLOAD_DIR/<applicant_id>/<file_id>.pdf`,
+    appends an embedded `ApplicantFile`, and sets `resume_text` (fed into the
+    matcher's semantic vector) when text was extracted.
+    """
+    file_id = uuid4()
+    directory = Path(settings.UPLOAD_DIR) / str(applicant.id)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{file_id}.pdf"
+    path.write_bytes(data)
+    applicant.files.append(
+        ApplicantFile(
+            id=file_id,
+            filename=filename,
+            size=len(data),
+            content_type=content_type,
+            storage_ref=str(path),
+        )
+    )
+    if resume_text:
+        applicant.resume_text = resume_text
     applicant.updated_at = datetime.now(UTC).isoformat()
     await applicant.save()
     return applicant

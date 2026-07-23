@@ -1,10 +1,11 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
 from app.api.deps import get_current_user, get_current_workspace_id
 from app.api.v1.routes.users.users_models import User
+from app.matching.extraction import ExtractionError, extract_text
 
 from . import applicants_service
 from .applicants_schemas import (
@@ -12,9 +13,37 @@ from .applicants_schemas import (
     ApplicantList,
     ApplicantPatch,
     ApplicantRead,
+    ResumeExtraction,
 )
 
 router = APIRouter()
+
+# Uploaded resumes must be PDFs no larger than this.
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+
+async def _read_pdf_upload(file: UploadFile) -> bytes:
+    """Read an uploaded file, enforcing the PDF-only / size rules.
+
+    Rejects non-PDFs (`415`) and oversized files (`413`).
+    """
+    if file.content_type not in ("application/pdf", "application/x-pdf"):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Only PDF files are supported.",
+        )
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="File exceeds the 10 MB limit.",
+        )
+    if not data.startswith(b"%PDF"):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="The file is not a valid PDF.",
+        )
+    return data
 
 
 @router.post("", response_model=ApplicantRead, status_code=status.HTTP_201_CREATED)
@@ -27,6 +56,21 @@ async def create_applicant(
         data, created_by=current_user.id, workspace_id=workspace_id
     )
     return ApplicantRead.model_validate(applicant)
+
+
+@router.post("/extract", response_model=ResumeExtraction)
+async def extract_applicant_resume(
+    file: Annotated[UploadFile, File()],
+) -> ResumeExtraction:
+    # Stateless: parses the uploaded PDF and returns fields to prefill the
+    # create-applicant form. Persistence happens later via `/{id}/files`.
+    data = await _read_pdf_upload(file)
+    try:
+        return applicants_service.extract_resume(data)
+    except ExtractionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
 
 
 @router.get("", response_model=ApplicantList)
@@ -84,3 +128,35 @@ async def delete_applicant(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete applicant",
         )
+
+
+@router.post(
+    "/{applicant_id}/files",
+    response_model=ApplicantRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_applicant_file(
+    applicant_id: UUID,
+    workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+    file: Annotated[UploadFile, File()],
+) -> ApplicantRead:
+    # Stores the uploaded resume and persists its raw text on the applicant so
+    # the matcher can embed it (the recommendation is "based on the file").
+    applicant = await applicants_service.get_applicant(applicant_id, workspace_id=workspace_id)
+    if applicant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Applicant not found")
+    data = await _read_pdf_upload(file)
+    try:
+        raw_text, _ = extract_text(data)
+    except ExtractionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    applicant = await applicants_service.add_applicant_file(
+        applicant,
+        filename=file.filename or "resume.pdf",
+        content_type=file.content_type or "application/pdf",
+        data=data,
+        resume_text=raw_text,
+    )
+    return ApplicantRead.model_validate(applicant)

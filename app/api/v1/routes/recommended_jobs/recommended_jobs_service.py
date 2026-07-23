@@ -160,8 +160,10 @@ async def generate_recommendations(
     workspace_id = workspace.id
     weights = _weights_for(workspace)
 
-    # Applicant-side features (computed once, reused across all jobs).
-    applicant_vec = embed(applicant_to_text(applicant))
+    # Applicant-side features (computed once, reused across all jobs). The raw
+    # text of the uploaded resume (if any) is folded into the semantic vector so
+    # the recommendation is grounded in the uploaded file.
+    applicant_vec = embed(applicant_to_text(applicant, applicant.resume_text))
     applicant_years = applicant_experience_years(applicant)
     applicant_experience = applicant_experience_text(applicant)
     # Embedding of the applicant's roles/qualifications, for the qualitative

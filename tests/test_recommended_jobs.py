@@ -78,6 +78,7 @@ def _applicant() -> SimpleNamespace:
             highest_education_level="Bachelor", course_program=None
         ),
         work_experience=[],
+        resume_text=None,
     )
 
 
@@ -123,7 +124,7 @@ def stub_pipeline(monkeypatch: pytest.MonkeyPatch) -> _Pipeline:
     monkeypatch.setattr(svc, "RecommendedJob", _FakeRecommendedJob)
     monkeypatch.setattr(svc, "embed", lambda _text: [1.0, 0.0, 0.0])
     monkeypatch.setattr(svc, "embed_batch", lambda texts: [[1.0, 0.0, 0.0] for _ in texts])
-    monkeypatch.setattr(svc, "applicant_to_text", lambda _a: "applicant text")
+    monkeypatch.setattr(svc, "applicant_to_text", lambda _a, _resume_text=None: "applicant text")
     monkeypatch.setattr(svc, "job_to_text", lambda _j: "job text")
     monkeypatch.setattr(svc, "applicant_experience_years", lambda _a: 3.0)
 

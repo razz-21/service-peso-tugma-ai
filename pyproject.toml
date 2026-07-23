@@ -18,6 +18,10 @@ dependencies = [
     "sentence-transformers>=5.6.0",
     "scikit-learn>=1.9.0",
     "numpy>=2.5.1",
+    "pymupdf>=1.24.0",
+    "pytesseract>=0.3.13",
+    "pillow>=10.4.0",
+    "dateparser>=1.2.0",
 ]
 
 [dependency-groups]
@@ -50,4 +54,11 @@ plugins = ["pydantic.mypy"]
 # strict mode doesn't fail on the embedding-model import.
 [[tool.mypy.overrides]]
 module = ["sentence_transformers.*"]
+ignore_missing_imports = true
+
+# PyMuPDF (fitz), pytesseract, and dateparser ship no type stubs; the
+# resume-extraction pipeline imports them, so ignore their missing stubs under
+# strict mode.
+[[tool.mypy.overrides]]
+module = ["fitz.*", "pymupdf.*", "pytesseract.*", "dateparser.*"]
 ignore_missing_imports = true
