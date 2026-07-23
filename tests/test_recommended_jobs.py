@@ -18,6 +18,8 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.api.v1.routes.recommended_jobs import recommended_jobs_service as svc
+from app.api.v1.routes.recommended_jobs.recommended_jobs_models import RecommendedJobStatus
+from app.api.v1.routes.recommended_jobs.recommended_jobs_schemas import RecommendedJobPatch
 
 
 class _FakeQuery:
@@ -244,3 +246,121 @@ async def test_generate_preserves_referred_and_excludes_their_jobs(
     assert {rec.job_id for rec in stub_pipeline.inserted} == {fresh_job.id}
     # The preserved row is returned by identity, not re-created.
     assert referred_rec in results
+
+
+# --- update_recommended_job vacancy accounting --------------------------------
+#
+# A referral occupies one of the job's vacancies while it is live (referred /
+# interview_scheduled / hired) and releases it when it ends negatively
+# (withdrawn / not_hired) or is cleared. These tests stub `Job.find_one` so the
+# transition bookkeeping in `update_recommended_job` runs in-memory.
+
+
+class _FakeRec:
+    """A minimal persisted recommendation supporting attribute set + `save`."""
+
+    def __init__(self, *, status: str | None, job_id: UUID, workspace_id: UUID) -> None:
+        self.status = status
+        self.job_id = job_id
+        self.workspace_id = workspace_id
+        self.saved = 0
+
+    async def save(self) -> None:
+        self.saved += 1
+
+
+class _FakeJobDoc:
+    """A minimal job whose vacancy count the service adjusts."""
+
+    def __init__(self, no_of_vacancies: int) -> None:
+        self.no_of_vacancies = no_of_vacancies
+        self.saved = 0
+
+    async def save(self) -> None:
+        self.saved += 1
+
+
+def _patch_job_lookup(monkeypatch: pytest.MonkeyPatch, job: _FakeJobDoc | None) -> list[bool]:
+    """Point `Job.find_one` at `job`; return a flag list recording each call."""
+    for attr in ("id", "workspace_id"):
+        monkeypatch.setattr(svc.Job, attr, object(), raising=False)
+    called: list[bool] = []
+
+    async def _find_one(*_a: object, **_k: object) -> _FakeJobDoc | None:
+        called.append(True)
+        return job
+
+    monkeypatch.setattr(svc.Job, "find_one", _find_one)
+    return called
+
+
+@pytest.mark.parametrize(
+    ("previous", "new", "expected"),
+    [
+        # Referring the applicant consumes a vacancy.
+        (None, RecommendedJobStatus.REFERRED, 4),
+        # Rolling a referral back to a negative terminal state releases it.
+        (RecommendedJobStatus.REFERRED, RecommendedJobStatus.WITHDRAWN, 6),
+        (RecommendedJobStatus.REFERRED, RecommendedJobStatus.NOT_HIRED, 6),
+        # Advancing within the live lifecycle keeps the seat consumed.
+        (RecommendedJobStatus.REFERRED, RecommendedJobStatus.INTERVIEW_SCHEDULED, 5),
+        (RecommendedJobStatus.INTERVIEW_SCHEDULED, RecommendedJobStatus.HIRED, 5),
+        (RecommendedJobStatus.REFERRED, RecommendedJobStatus.HIRED, 5),
+        # Re-referring after a negative outcome consumes a vacancy again.
+        (RecommendedJobStatus.WITHDRAWN, RecommendedJobStatus.REFERRED, 4),
+        (RecommendedJobStatus.NOT_HIRED, RecommendedJobStatus.INTERVIEW_SCHEDULED, 4),
+    ],
+)
+async def test_update_status_adjusts_job_vacancies(
+    monkeypatch: pytest.MonkeyPatch,
+    previous: RecommendedJobStatus | None,
+    new: RecommendedJobStatus,
+    expected: int,
+) -> None:
+    workspace_id, job_id = uuid4(), uuid4()
+    rec = _FakeRec(status=previous, job_id=job_id, workspace_id=workspace_id)
+    job = _FakeJobDoc(no_of_vacancies=5)
+    _patch_job_lookup(monkeypatch, job)
+
+    await svc.update_recommended_job(rec, RecommendedJobPatch(status=new))
+
+    assert rec.status == new
+    assert job.no_of_vacancies == expected
+
+
+async def test_update_status_never_drives_vacancies_negative(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A referral against a job already at zero open seats floors at 0, not -1.
+    rec = _FakeRec(status=None, job_id=uuid4(), workspace_id=uuid4())
+    job = _FakeJobDoc(no_of_vacancies=0)
+    _patch_job_lookup(monkeypatch, job)
+
+    await svc.update_recommended_job(rec, RecommendedJobPatch(status="referred"))
+
+    assert job.no_of_vacancies == 0
+
+
+async def test_update_without_status_change_leaves_vacancies_untouched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Patching an unrelated field (is_relevant) must not touch the job at all.
+    rec = _FakeRec(status=RecommendedJobStatus.REFERRED, job_id=uuid4(), workspace_id=uuid4())
+    called = _patch_job_lookup(monkeypatch, _FakeJobDoc(no_of_vacancies=5))
+
+    await svc.update_recommended_job(rec, RecommendedJobPatch(is_relevant=True))
+
+    assert called == []  # Job.find_one was never invoked
+
+
+async def test_update_same_live_status_is_idempotent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Re-sending the current live status must not double-count the vacancy.
+    rec = _FakeRec(status=RecommendedJobStatus.REFERRED, job_id=uuid4(), workspace_id=uuid4())
+    job = _FakeJobDoc(no_of_vacancies=4)
+    _patch_job_lookup(monkeypatch, job)
+
+    await svc.update_recommended_job(rec, RecommendedJobPatch(status=RecommendedJobStatus.REFERRED))
+
+    assert job.no_of_vacancies == 4

@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from uuid import UUID
 
 from beanie.operators import In
@@ -112,13 +113,65 @@ async def list_recommended_jobs(
     return recommendations, total
 
 
+# Referral-lifecycle statuses in which the applicant still occupies one of the
+# job's vacancies. Moving *into* one of these consumes a vacancy; moving *out*
+# of them (to withdrawn / not_hired, or back to unassessed) releases it. `hired`
+# keeps the seat consumed — the position stays filled.
+_VACANCY_HOLDING_STATUSES = frozenset(
+    {
+        RecommendedJobStatus.REFERRED,
+        RecommendedJobStatus.INTERVIEW_SCHEDULED,
+        RecommendedJobStatus.HIRED,
+    }
+)
+
+
+def _holds_vacancy(status: RecommendedJobStatus | None) -> bool:
+    return status in _VACANCY_HOLDING_STATUSES
+
+
+async def _apply_vacancy_delta(job_id: UUID, workspace_id: UUID, delta: int) -> None:
+    """Adjust a job's open-vacancy count when a referral occupies/releases a seat.
+
+    `delta` is -1 when a referral starts holding a vacancy (e.g. the applicant is
+    referred) and +1 when it releases one (withdrawn / not_hired). The count is
+    floored at 0 so a duplicate or out-of-order transition can never drive it
+    negative. A missing job (deleted out from under the referral) is a no-op.
+    """
+    job = await Job.find_one(Job.id == job_id, Job.workspace_id == workspace_id)
+    if job is None:
+        return
+    job.no_of_vacancies = max(0, job.no_of_vacancies + delta)
+    await job.save()
+
+
 async def update_recommended_job(
     recommended_job: RecommendedJob, data: RecommendedJobPatch
 ) -> RecommendedJob:
     changes = data.model_dump(exclude_unset=True)
+    # `updated_at` is server-owned — always stamp it fresh so any edit (e.g. an
+    # officer referring the applicant) bumps the timestamp, keeping the most
+    # recently touched referral sorted to the top for clients.
+    changes.pop("updated_at", None)
+    # Capture the status before applying changes so a status transition can
+    # occupy or release one of the job's vacancies (referring the applicant
+    # consumes a seat; withdrawing / not-hiring rolls it back).
+    previous_status = recommended_job.status
     for field, value in changes.items():
         setattr(recommended_job, field, value)
+    recommended_job.updated_at = datetime.now(UTC).isoformat()
     await recommended_job.save()
+
+    if "status" in changes:
+        was_holding = _holds_vacancy(previous_status)
+        now_holding = _holds_vacancy(recommended_job.status)
+        if was_holding != now_holding:
+            await _apply_vacancy_delta(
+                recommended_job.job_id,
+                recommended_job.workspace_id,
+                delta=-1 if now_holding else 1,
+            )
+
     return recommended_job
 
 

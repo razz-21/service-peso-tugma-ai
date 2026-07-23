@@ -34,7 +34,9 @@ class JobBase(BaseModel):
     minimum_education_attainment: list[str] = Field(default_factory=list)
     experience_required: str | None = None
     skills_required: list[str] = Field(default_factory=list)
-    no_of_vacancies: int = Field(default=1, ge=1, le=VACANCIES_MAX)
+    # Read-side bound is `ge=0`: a job whose vacancies were all consumed by
+    # referrals legitimately reads as 0. Creating/patching still requires `ge=1`.
+    no_of_vacancies: int = Field(default=1, ge=0, le=VACANCIES_MAX)
     salary_per_month: int | None = Field(default=None, ge=0)
     location: str | None = None
     age_range: str | None = None
