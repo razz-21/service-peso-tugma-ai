@@ -6,6 +6,7 @@ from app.api.v1.routes import (
     applicants,
     auth,
     companies,
+    dashboard,
     health,
     jobs,
     me,
@@ -33,6 +34,9 @@ api_router.include_router(
     companies.router, prefix="/companies", tags=["companies"], dependencies=auth_required
 )
 api_router.include_router(jobs.router, prefix="/jobs", tags=["jobs"], dependencies=auth_required)
+api_router.include_router(
+    dashboard.router, prefix="/dashboard", tags=["dashboard"], dependencies=auth_required
+)
 api_router.include_router(
     applicants.router, prefix="/applicants", tags=["applicants"], dependencies=auth_required
 )

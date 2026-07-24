@@ -14,7 +14,7 @@ from ..applicants import applicants_service
 from ..companies import companies_service
 from ..companies.companies_models import Company
 from ..jobs import jobs_service
-from ..jobs.jobs_models import Job
+from ..jobs.jobs_models import Job, JobStatus
 from ..users import users_service
 from ..users.users_models import User
 from . import applicant_jobs_service
@@ -77,6 +77,14 @@ async def create_applicant_job(
     if data.assigned_by is not None and await users_service.get_user(data.assigned_by) is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Assigned-by (user) not found"
+        )
+
+    # A referral is only allowed while the job is still active — a closed job
+    # can't take new referrals.
+    if job.status != JobStatus.ACTIVE:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Cannot refer applicant: this job is no longer active",
         )
 
     # Validate the job's hard primary requirements before proceeding: an

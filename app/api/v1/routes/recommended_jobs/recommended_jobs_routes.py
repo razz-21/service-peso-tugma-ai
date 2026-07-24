@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from app.api.deps import get_current_user, get_current_workspace_id
 from app.api.v1.routes.users.users_models import User
@@ -11,7 +11,7 @@ from ..applicants import applicants_service
 from ..companies import companies_service
 from ..companies.companies_models import Company
 from ..jobs import jobs_service
-from ..jobs.jobs_models import Job
+from ..jobs.jobs_models import Job, JobStatus
 from ..users import users_service
 from ..workspaces import workspaces_service
 from . import recommended_jobs_service
@@ -103,8 +103,20 @@ async def create_recommended_job(
     data: RecommendedJobCreate,
     workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
     current_user: Annotated[User, Depends(get_current_user)],
-) -> RecommendedJobRead:
+) -> RecommendedJobRead | Response:
     job = await _require_job(data.job_id, workspace_id)
+    if job.status != JobStatus.ACTIVE:
+        # A referral (created directly in a vacancy-holding status, e.g. a manual
+        # 'referred') to a closed job is rejected with a message, since referring
+        # to an inactive job is a real error the officer must see. A plain
+        # recommendation on a closed job is instead silently skipped (nothing
+        # created, no error) so it simply never surfaces.
+        if recommended_jobs_service.starts_holding_vacancy(None, data.status):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Cannot refer applicant: this job is no longer active",
+            )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     await _require_applicant(data.applicant_id, workspace_id)
     # `assessed_by` defaults to the authenticated user when the client omits it.
     assessed_by = data.assessed_by or current_user.id
@@ -227,11 +239,19 @@ async def update_recommended_job(
         recommended_job.status, data.status
     ):
         job = await jobs_service.get_job(recommended_job.job_id, workspace_id=workspace_id)
-        if job is not None and not has_open_vacancy(job.no_of_vacancies):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Job has no open vacancies",
-            )
+        if job is not None:
+            # Referring an applicant is only allowed while the job is still
+            # active — a closed job can't take new referrals.
+            if job.status != JobStatus.ACTIVE:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Cannot refer applicant: this job is no longer active",
+                )
+            if not has_open_vacancy(job.no_of_vacancies):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Job has no open vacancies",
+                )
     recommended_job = await recommended_jobs_service.update_recommended_job(recommended_job, data)
     job = await jobs_service.get_job(recommended_job.job_id, workspace_id=workspace_id)
     company = (
