@@ -37,7 +37,6 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     password: str = Field(min_length=8, max_length=128)
-    workspace_id: UUID | None = None
 
 
 class UserPatch(BaseModel):

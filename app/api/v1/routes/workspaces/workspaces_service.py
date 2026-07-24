@@ -3,8 +3,13 @@ from uuid import UUID
 
 from beanie.operators import Or, RegEx
 
+from app.api.v1.routes.applicants.applicants_models import Applicant
+from app.api.v1.routes.companies.companies_models import Company
+from app.api.v1.routes.jobs.jobs_models import Job
+from app.api.v1.routes.recommended_jobs.recommended_jobs_models import RecommendedJob
+
 from .workspaces_models import Workspace
-from .workspaces_schemas import WorkspaceCreate, WorkspacePatch
+from .workspaces_schemas import WorkspaceCreate, WorkspacePatch, WorkspaceStatistics
 
 
 async def get_workspace(workspace_id: UUID) -> Workspace | None:
@@ -42,3 +47,18 @@ async def update_workspace(workspace: Workspace, data: WorkspacePatch) -> Worksp
 async def delete_workspace(workspace: Workspace) -> bool:
     result = await workspace.delete()
     return result.acknowledged
+
+
+async def get_workspace_statistics(workspace_id: UUID) -> WorkspaceStatistics:
+    total_applicants = await Applicant.find(Applicant.workspace_id == workspace_id).count()
+    total_jobs = await Job.find(Job.workspace_id == workspace_id).count()
+    total_companies = await Company.find(Company.workspace_id == workspace_id).count()
+    total_recommended_jobs = await RecommendedJob.find(
+        RecommendedJob.workspace_id == workspace_id
+    ).count()
+    return WorkspaceStatistics(
+        total_applicants=total_applicants,
+        total_jobs=total_jobs,
+        total_companies=total_companies,
+        total_recommended_jobs=total_recommended_jobs,
+    )

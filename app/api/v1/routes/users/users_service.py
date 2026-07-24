@@ -36,11 +36,11 @@ async def get_user_by_email(email: str) -> User | None:
     return await User.find_one(User.email == email)
 
 
-async def create_user(data: UserCreate) -> User:
-    print(data.model_dump(exclude={"password"}))
+async def create_user(data: UserCreate, workspace_id: UUID | None = None) -> User:
     user = User(
         **data.model_dump(exclude={"password"}),
         password=hash_password(data.password),
+        workspace_id=workspace_id,
     )
     await user.insert()
     return user

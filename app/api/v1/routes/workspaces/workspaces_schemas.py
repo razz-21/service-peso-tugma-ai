@@ -59,3 +59,12 @@ class WorkspaceList(BaseModel):
     limit: int
     offset: int
     items: list[WorkspaceRead]
+
+
+class WorkspaceStatistics(BaseModel):
+    """Aggregate counts of the resources scoped to a single workspace."""
+
+    total_applicants: int
+    total_jobs: int
+    total_companies: int
+    total_recommended_jobs: int
