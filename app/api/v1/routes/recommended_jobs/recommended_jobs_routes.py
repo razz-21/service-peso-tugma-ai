@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.deps import get_current_user, get_current_workspace_id
 from app.api.v1.routes.users.users_models import User
+from app.matching.primary_requirements import has_open_vacancy
 
 from ..applicants import applicants_service
 from ..companies import companies_service
@@ -217,6 +218,20 @@ async def update_recommended_job(
         await _require_applicant(data.applicant_id, workspace_id)
     if data.assessed_by is not None:
         await _require_assessor(data.assessed_by)
+    # Referring the applicant (moving the recommendation into a vacancy-holding
+    # status) consumes one of the job's open seats — gate it on an open vacancy,
+    # mirroring the applicant_jobs referral path. Only a transition that *starts*
+    # holding a seat is gated; advancing between holding states or releasing one
+    # is unaffected.
+    if data.status is not None and recommended_jobs_service.starts_holding_vacancy(
+        recommended_job.status, data.status
+    ):
+        job = await jobs_service.get_job(recommended_job.job_id, workspace_id=workspace_id)
+        if job is not None and not has_open_vacancy(job.no_of_vacancies):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Job has no open vacancies",
+            )
     recommended_job = await recommended_jobs_service.update_recommended_job(recommended_job, data)
     job = await jobs_service.get_job(recommended_job.job_id, workspace_id=workspace_id)
     company = (

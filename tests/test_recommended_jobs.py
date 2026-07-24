@@ -364,3 +364,36 @@ async def test_update_same_live_status_is_idempotent(
     await svc.update_recommended_job(rec, RecommendedJobPatch(status=RecommendedJobStatus.REFERRED))
 
     assert job.no_of_vacancies == 4
+
+
+# --- starts_holding_vacancy (referral gate) -----------------------------------
+#
+# The PATCH referral route gates on this predicate: a transition that *starts*
+# holding a seat is only allowed when the job still has an open vacancy. Only
+# such transitions return True (advancing between live states or releasing a
+# seat must not be gated).
+
+
+@pytest.mark.parametrize(
+    ("previous", "new", "expected"),
+    [
+        # Starts holding a seat -> gated (True).
+        (None, RecommendedJobStatus.REFERRED, True),
+        (RecommendedJobStatus.WITHDRAWN, RecommendedJobStatus.REFERRED, True),
+        (RecommendedJobStatus.NOT_HIRED, RecommendedJobStatus.INTERVIEW_SCHEDULED, True),
+        # Already holding, advancing within the live lifecycle -> not gated.
+        (RecommendedJobStatus.REFERRED, RecommendedJobStatus.INTERVIEW_SCHEDULED, False),
+        (RecommendedJobStatus.REFERRED, RecommendedJobStatus.HIRED, False),
+        # Releasing a seat -> not gated.
+        (RecommendedJobStatus.REFERRED, RecommendedJobStatus.WITHDRAWN, False),
+        (RecommendedJobStatus.REFERRED, RecommendedJobStatus.NOT_HIRED, False),
+        # Non-holding to non-holding -> not gated.
+        (None, RecommendedJobStatus.WITHDRAWN, False),
+    ],
+)
+def test_starts_holding_vacancy(
+    previous: RecommendedJobStatus | None,
+    new: RecommendedJobStatus,
+    expected: bool,
+) -> None:
+    assert svc.starts_holding_vacancy(previous, new) is expected

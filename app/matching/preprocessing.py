@@ -142,3 +142,81 @@ def preprocess(text: str) -> str:
     lowered = clean(text).lower()
     tokens = [token for token in _WHITESPACE.sub(" ", lowered).strip().split(" ") if token]
     return " ".join(remove_stopwords(tokens))
+
+
+# Tokens that mark text as a degree/education phrase (used only to *detect*
+# degree context, so a bare role like "Field Engineer" is left untouched).
+_DEGREE_INDICATORS: frozenset[str] = frozenset(
+    {
+        "degree",
+        "bachelor",
+        "bachelors",
+        "master",
+        "masters",
+        "associate",
+        "associates",
+        "diploma",
+        "baccalaureate",
+        "undergraduate",
+        "graduate",
+        "postgraduate",
+        "phd",
+        "doctorate",
+        "doctoral",
+        "course",
+        "courses",
+        "tertiary",
+        "bs",
+        "ba",
+        "bsc",
+        "ab",
+        "bsba",
+    }
+)
+
+# Degree-structure boilerplate stripped once text is known to be a degree phrase.
+# Deliberately excludes ambiguous words that double as role/title tokens
+# ("associate", "master", "graduate", "course") so only unambiguous scaffolding
+# is removed; the field of study (e.g. "logistics", "nursing") is preserved.
+_DEGREE_FRAMING: frozenset[str] = frozenset(
+    {
+        "degree",
+        "bachelor",
+        "bachelors",
+        "baccalaureate",
+        "diploma",
+        "undergraduate",
+        "phd",
+        "doctorate",
+        "doctoral",
+        "related",
+        "field",
+        "fields",
+        "bs",
+        "ba",
+        "bsc",
+        "ab",
+        "bsba",
+    }
+)
+
+
+def strip_degree_framing(text: str) -> str:
+    """Preprocess ``text`` and, when it reads as a degree phrase, drop the
+    degree-structure boilerplate.
+
+    Two arbitrary degrees share so much framing ("Bachelor of Science ...
+    Degree in ... related field") that MiniLM rates *any* two diplomas as
+    similar regardless of discipline. Removing that scaffolding lets a
+    field-of-study comparison contrast the actual fields (e.g. "Logistics" vs
+    "Information Technology"). Text that carries no degree indicator (a plain
+    role such as "Field Engineer") is returned merely preprocessed, so role
+    matching is unaffected.
+    """
+    processed = preprocess(text)
+    if not processed:
+        return ""
+    tokens = processed.split(" ")
+    if not any(token in _DEGREE_INDICATORS for token in tokens):
+        return processed
+    return " ".join(token for token in tokens if token not in _DEGREE_FRAMING)

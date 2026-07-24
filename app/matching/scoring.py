@@ -247,26 +247,93 @@ def education_match(
 # --- Location --------------------------------------------------------------
 
 
+# Administrative-level noise words stripped so "Cagayan de Oro City" and
+# "Cagayan de Oro" compare equal ("City of X" / "X City", "X Province", ...).
+_LOCATION_NOISE = re.compile(r"^(city of |municipality of |province of )|( city| province)$")
+
+# Graded location credit: a shared city/municipality (or barangay within a
+# consistent province) is a full match; sharing only the province is partial.
+_LOCATION_CITY_SCORE = 1.0
+_LOCATION_PROVINCE_SCORE = 0.6
+
+
+def _location_parts(value: str) -> list[str]:
+    """Normalized location components in order (most specific → province last).
+
+    Splits on commas, lowercases, trims, and strips administrative-level noise
+    words so hierarchy parts (barangay / city / province) compare directly
+    regardless of the surrounding qualifier text. Order and duplicates are
+    preserved so the province (last element) can be identified positionally.
+    """
+    parts: list[str] = []
+    for part in value.split(","):
+        token = _LOCATION_NOISE.sub("", part.strip().lower()).strip()
+        if token:
+            parts.append(token)
+    return parts
+
+
+def _location_score(pref_parts: list[str], job_parts: list[str]) -> float:
+    """Graded overlap between two normalized, ordered locations.
+
+    * ``1.0`` — they agree at city/municipality (or finer) level: a shared
+      component that is not merely the province, with provinces that don't
+      conflict. Guards against coincidental barangay-name collisions (e.g.
+      "Poblacion") between two *different* provinces.
+    * ``0.6`` — same province only (both name a province and they're equal, but
+      nothing more specific lines up).
+    * ``0.0`` — no shared component.
+    """
+    if not pref_parts or not job_parts:
+        return 0.0
+    shared = set(pref_parts) & set(job_parts)
+    if not shared:
+        return 0.0
+    # Province = trailing component, but only when a location has ≥2 parts; a
+    # bare single token (e.g. "Cagayan de Oro") is treated as a city, not a
+    # province, so it still fully matches a qualified "…, Cagayan de Oro, …".
+    pref_prov = pref_parts[-1] if len(pref_parts) >= 2 else None
+    job_prov = job_parts[-1] if len(job_parts) >= 2 else None
+    provinces_conflict = pref_prov is not None and job_prov is not None and pref_prov != job_prov
+    specific_shared = shared - {pref_prov, job_prov}
+    if specific_shared and not provinces_conflict:
+        return _LOCATION_CITY_SCORE
+    if pref_prov is not None and pref_prov == job_prov:
+        return _LOCATION_PROVINCE_SCORE
+    return 0.0
+
+
 def location_match(
     preferred_locations: Sequence[str], job_location: str | None
 ) -> tuple[float, str | None]:
-    """Whether the job's location matches any of the applicant's preferences.
+    """Graded match of the job's location against the applicant's preferences.
 
-    Substring match in either direction (case-insensitive). A missing job
-    location or empty preference list is treated as no constraint (1.0). Returns
-    ``(score, matched_location)``.
+    Compares normalized location components hierarchically and returns the
+    *best-scoring* preference: ``1.0`` for a shared city/municipality (so
+    "Cagayan de Oro City, Misamis Oriental" fully matches "Bulua, Cagayan de
+    Oro, Misamis Oriental"), ``0.6`` for a shared province only (a soft partial
+    credit), and ``0.0`` for no overlap. A missing job location or empty
+    preference list is treated as no constraint (1.0). Returns
+    ``(score, matched_location)`` with ``matched_location`` set to the
+    best-matching preference (``None`` when nothing matches).
     """
     if not job_location:
         return 1.0, None
     preferences = [pref.strip() for pref in preferred_locations if pref.strip()]
     if not preferences:
         return 1.0, None
-    job_loc = job_location.lower()
+    job_parts = _location_parts(job_location)
+    if not job_parts:
+        return 1.0, None
+    best_score = 0.0
+    best_pref: str | None = None
     for preference in preferences:
-        low = preference.lower()
-        if low in job_loc or job_loc in low:
-            return 1.0, preference
-    return 0.0, None
+        score = _location_score(_location_parts(preference), job_parts)
+        if score > best_score:
+            best_score, best_pref = score, preference
+    if best_pref is None:
+        return 0.0, None
+    return best_score, best_pref
 
 
 # --- Combination -----------------------------------------------------------

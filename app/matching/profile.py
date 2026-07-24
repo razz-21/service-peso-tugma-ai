@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from app.api.v1.routes.applicants.applicants_models import Applicant
 from app.api.v1.routes.jobs.jobs_models import Job
 
-from .preprocessing import preprocess
+from .preprocessing import preprocess, strip_degree_framing
 
 
 def _join(parts: list[str]) -> str:
@@ -71,23 +71,27 @@ def applicant_experience_text(applicant: Applicant) -> str:
 
     Concatenates work positions/companies and educational level/course — the
     fields a free-text experience requirement (a role or a field of study) is
-    matched against semantically. Empty when the applicant has neither, which the
-    caller treats as "no evidence" for a qualitative requirement.
+    matched against semantically. The education portion has its degree framing
+    stripped (so a field-of-study requirement compares "Information Technology"
+    vs "Logistics", not the shared "Bachelor of Science / Degree" scaffolding),
+    while work text is left intact so role titles like "Field Engineer" survive.
+    Empty when the applicant has neither, which the caller treats as "no
+    evidence" for a qualitative requirement.
     """
-    parts: list[str] = []
-    for experience in applicant.work_experience:
-        parts.append(_join([experience.position or "", experience.company or ""]))
+    work_parts = [
+        _join([experience.position or "", experience.company or ""])
+        for experience in applicant.work_experience
+    ]
+    work_text = preprocess(_join(work_parts))
     education = applicant.educational_background
-    if education is not None:
-        parts.append(
-            _join(
-                [
-                    education.highest_education_level or "",
-                    education.course_program or "",
-                ]
-            )
+    education_text = (
+        strip_degree_framing(
+            _join([education.highest_education_level or "", education.course_program or ""])
         )
-    return preprocess(_join(parts))
+        if education is not None
+        else ""
+    )
+    return " ".join(text for text in (work_text, education_text) if text)
 
 
 def applicant_experience_years(applicant: Applicant) -> float:

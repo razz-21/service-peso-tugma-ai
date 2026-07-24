@@ -6,7 +6,7 @@ from beanie.operators import In
 from app.api.v1.routes.applicants.applicants_models import Applicant
 from app.api.v1.routes.workspaces.workspaces_models import Workspace
 from app.matching.embeddings import embed, embed_batch
-from app.matching.preprocessing import preprocess
+from app.matching.preprocessing import strip_degree_framing
 from app.matching.primary_requirements import eligibility_matches, meets_primary_requirements
 from app.matching.profile import (
     applicant_experience_text,
@@ -128,6 +128,18 @@ _VACANCY_HOLDING_STATUSES = frozenset(
 
 def _holds_vacancy(status: RecommendedJobStatus | None) -> bool:
     return status in _VACANCY_HOLDING_STATUSES
+
+
+def starts_holding_vacancy(
+    previous_status: RecommendedJobStatus | None,
+    new_status: RecommendedJobStatus | None,
+) -> bool:
+    """Whether a status transition moves a recommendation *into* a seat-holding
+    state (e.g. referring the applicant), which consumes one of the job's
+    vacancies. Callers gate such a transition on an open vacancy still existing;
+    advancing between two holding states, or releasing a seat, returns False.
+    """
+    return not _holds_vacancy(previous_status) and _holds_vacancy(new_status)
 
 
 async def _apply_vacancy_delta(job_id: UUID, workspace_id: UUID, delta: int) -> None:
@@ -277,11 +289,19 @@ async def generate_recommendations(
 
     # Embed each job's qualitative experience requirement (field/role wording) in
     # one batch, so the per-job loop can cosine-compare it to the applicant's
-    # experience without re-encoding. Jobs with a purely numeric or empty
-    # requirement have no qualitative term and are skipped here.
-    job_qual_terms = {job.id: experience_requirement_terms(job.experience_required) for job in jobs}
+    # experience without re-encoding. Degree framing is stripped so a field-of-
+    # study requirement contrasts the disciplines ("Logistics" vs "Information
+    # Technology") rather than the shared "Bachelor of ... Degree in ..."
+    # scaffolding that inflates any two diplomas' similarity. Jobs with a purely
+    # numeric requirement, or a bare degree *level* (which strips to nothing and
+    # is left to education_match), have no qualitative term and are skipped.
+    job_qual_raw = {job.id: experience_requirement_terms(job.experience_required) for job in jobs}
+    job_qual_terms = {
+        job_id: (strip_degree_framing(raw) or None) if raw else None
+        for job_id, raw in job_qual_raw.items()
+    }
     qual_jobs = [job for job in jobs if job_qual_terms[job.id]]
-    qual_vectors = embed_batch([preprocess(job_qual_terms[job.id] or "") for job in qual_jobs])
+    qual_vectors = embed_batch([job_qual_terms[job.id] or "" for job in qual_jobs])
     job_qual_vec = {job.id: vec for job, vec in zip(qual_jobs, qual_vectors, strict=True)}
 
     scored: list[tuple[Job, RecommendationScores, int, list[str]]] = []

@@ -53,6 +53,36 @@ def test_preprocess_empty_input() -> None:
     assert preprocessing.preprocess("   ") == ""
 
 
+def test_strip_degree_framing_removes_scaffolding_keeps_field() -> None:
+    # Degree phrases lose their "Bachelor of ... Degree in ... related field"
+    # scaffolding so only the field of study remains for comparison.
+    requirement = (
+        "Degree in Logistics, Supply Chain Management, Business, " "Administration or related field"
+    )
+    assert (
+        preprocessing.strip_degree_framing(requirement)
+        == "logistics supply chain management business administration"
+    )
+    assert (
+        preprocessing.strip_degree_framing("Bachelor of Science in Information Technology")
+        == "science information technology"
+    )
+
+
+def test_strip_degree_framing_leaves_non_degree_text_intact() -> None:
+    # A plain role carries no degree indicator, so nothing is stripped — "field"
+    # in a job title survives.
+    assert preprocessing.strip_degree_framing("Field Engineer") == "field engineer"
+    assert preprocessing.strip_degree_framing("Electrical Engineer") == "electrical engineer"
+
+
+def test_strip_degree_framing_bare_level_collapses_to_empty() -> None:
+    # A degree *level* with no field of study strips to nothing (left to the
+    # education ladder, not the qualitative experience match).
+    assert preprocessing.strip_degree_framing("Bachelor's Degree") == ""
+    assert preprocessing.strip_degree_framing("") == ""
+
+
 # --- Cosine similarity -----------------------------------------------------
 
 
@@ -185,8 +215,61 @@ def test_location_matches_preference() -> None:
     assert matched == "Cagayan de Oro"
 
 
+def test_location_matches_on_shared_city_component() -> None:
+    # Real-world case: applicant's fully-qualified preference shares the city
+    # component with a job whose location leads with a barangay.
+    score, matched = location_match(
+        ["Cagayan de Oro City, Misamis Oriental"],
+        "Bulua, Cagayan de Oro, Misamis Oriental",
+    )
+    assert score == 1.0
+    assert matched == "Cagayan de Oro City, Misamis Oriental"
+
+
+def test_location_shared_province_only_is_partial_credit() -> None:
+    # Same province (Misamis Oriental) but different city → graded partial score.
+    score, matched = location_match(
+        ["El Salvador City, Misamis Oriental"],
+        "Bulua, Cagayan de Oro, Misamis Oriental",
+    )
+    assert score == 0.6
+    assert matched == "El Salvador City, Misamis Oriental"
+
+
+def test_location_city_match_beats_province_match() -> None:
+    # A city-level match (Cagayan de Oro) outranks a province-only one and is
+    # the preference returned, regardless of ordering.
+    score, matched = location_match(
+        ["El Salvador City, Misamis Oriental", "Cagayan de Oro City, Misamis Oriental"],
+        "Bulua, Cagayan de Oro, Misamis Oriental",
+    )
+    assert score == 1.0
+    assert matched == "Cagayan de Oro City, Misamis Oriental"
+
+
+def test_location_picks_best_scoring_preference() -> None:
+    # Cebu (no overlap) is skipped; Alubijid shares only the province → 0.6.
+    score, matched = location_match(
+        ["Cebu City, Cebu", "Alubijid, Misamis Oriental"],
+        "Bulua, Cagayan de Oro, Misamis Oriental",
+    )
+    assert score == 0.6
+    assert matched == "Alubijid, Misamis Oriental"
+
+
+def test_location_shared_barangay_across_provinces_no_credit() -> None:
+    # "Poblacion" is a common barangay name; a collision across different
+    # provinces must not earn credit.
+    assert location_match(
+        ["Poblacion, Davao City, Davao del Sur"],
+        "Poblacion, Cagayan de Oro, Misamis Oriental",
+    ) == (0.0, None)
+
+
 def test_location_no_match() -> None:
     assert location_match(["Manila"], "Cebu City") == (0.0, None)
+    # Different province and city — no shared component.
+    assert location_match(["Makati City, Metro Manila"], "Cebu City, Cebu") == (0.0, None)
 
 
 def test_location_no_constraint() -> None:

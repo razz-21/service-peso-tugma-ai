@@ -7,7 +7,7 @@ explicitly (`from app.matching.embeddings import embed`) so that `import
 app.matching` stays lightweight for the pure-Python scoring/preprocessing paths.
 """
 
-from .preprocessing import clean, preprocess, remove_stopwords
+from .preprocessing import clean, preprocess, remove_stopwords, strip_degree_framing
 from .primary_requirements import (
     age_matches,
     applicant_age,
@@ -64,5 +64,6 @@ __all__ = [
     "preprocess",
     "remove_stopwords",
     "sex_matches",
+    "strip_degree_framing",
     "skills_match",
 ]
