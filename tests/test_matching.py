@@ -21,8 +21,11 @@ from app.matching.primary_requirements import (
     sex_matches,
 )
 from app.matching.profile import (
+    applicant_course_text,
+    applicant_experience_text,
     applicant_experience_years,
     applicant_to_text,
+    job_course_text,
     job_to_text,
 )
 from app.matching.scoring import (
@@ -57,7 +60,7 @@ def test_strip_degree_framing_removes_scaffolding_keeps_field() -> None:
     # Degree phrases lose their "Bachelor of ... Degree in ... related field"
     # scaffolding so only the field of study remains for comparison.
     requirement = (
-        "Degree in Logistics, Supply Chain Management, Business, " "Administration or related field"
+        "Degree in Logistics, Supply Chain Management, Business, Administration or related field"
     )
     assert (
         preprocessing.strip_degree_framing(requirement)
@@ -117,6 +120,41 @@ def test_skills_no_requirement_is_full_score() -> None:
 
 def test_skills_applicant_has_none() -> None:
     assert skills_match([], ["Python"]) == (0.0, [])
+
+
+def test_skills_semantic_credits_related_skill() -> None:
+    # "JS" is not an exact match for "JavaScript", but a high MiniLM cosine
+    # credits it as covered.
+    score, matched = skills_match(["JS"], ["JavaScript"], {"JavaScript": 0.8})
+    assert matched == ["JavaScript"]
+    assert score == 1.0  # calibrated 0.8 clamps to 1.0 (>= high band)
+
+
+def test_skills_semantic_below_threshold_not_matched() -> None:
+    score, matched = skills_match(["Nursing"], ["JavaScript"], {"JavaScript": 0.2})
+    assert matched == []
+    assert score == 0.0  # calibrated below the low band floors to 0
+
+
+def test_skills_semantic_partial_credit_below_match_threshold() -> None:
+    # cosine 0.55 -> calibrated (0.55-0.35)/(0.75-0.35) = 0.5, but below the 0.62
+    # match threshold, so it lends partial score without being listed as matched.
+    score, matched = skills_match(["Java"], ["Kotlin"], {"Kotlin": 0.55})
+    assert matched == []
+    assert math.isclose(score, 0.5)
+
+
+def test_skills_exact_match_takes_precedence_over_low_similarity() -> None:
+    score, matched = skills_match(["Python"], ["Python"], {"Python": 0.0})
+    assert matched == ["Python"]
+    assert score == 1.0
+
+
+def test_skills_semantic_mix_exact_and_related() -> None:
+    # One exact match (1.0) and one semantic match (0.7 -> calibrated ~0.875).
+    score, matched = skills_match(["Python", "React"], ["Python", "React.js"], {"React.js": 0.7})
+    assert matched == ["Python", "React.js"]
+    assert math.isclose(score, (1.0 + (0.7 - 0.35) / (0.75 - 0.35)) / 2)
 
 
 # --- Experience ------------------------------------------------------------
@@ -204,6 +242,26 @@ def test_education_no_requirement_is_full_score() -> None:
 
 def test_education_unknown_applicant_with_requirement() -> None:
     assert education_match(None, ["Bachelor's Degree"]) == (0.0, None)
+
+
+def test_education_averages_level_and_course_when_both_specified() -> None:
+    # Level met (1.0) averaged with a strong course similarity (calibrated ~1.0).
+    score, reason = education_match("Bachelor's Degree", ["High School"], course_similarity=0.55)
+    assert math.isclose(score, 1.0)
+    assert reason == "Bachelor's Degree"
+
+
+def test_education_course_only_when_no_level_requirement() -> None:
+    # No recognizable level requirement: score is the calibrated course match.
+    score, reason = education_match(None, [], course_similarity=0.35)
+    assert math.isclose(score, 0.5)  # midpoint of the [0.15, 0.55] MiniLM band
+    assert reason is None
+
+
+def test_education_course_mismatch_pulls_score_down() -> None:
+    # Level met but an unrelated course (low similarity) averages the score down.
+    score, _ = education_match("Bachelor's Degree", ["High School"], course_similarity=0.15)
+    assert math.isclose(score, 0.5)  # (1.0 + 0.0) / 2
 
 
 # --- Location --------------------------------------------------------------
@@ -344,6 +402,41 @@ def test_applicant_to_text_appends_resume_text() -> None:
     assert "kubernetes" in text and "docker" in text
 
 
+def test_applicant_experience_text_is_work_only() -> None:
+    # Experience text covers work roles/companies and deliberately excludes the
+    # course of study — that is scored by the education dimension instead.
+    text = applicant_experience_text(_applicant())  # type: ignore[arg-type]
+    assert "backend developer" in text
+    assert "computer science" not in text
+
+
+def test_applicant_course_text_strips_degree_framing() -> None:
+    text = applicant_course_text(  # type: ignore[arg-type]
+        _applicant(
+            educational_background=SimpleNamespace(
+                highest_education_level="Bachelor's Degree",
+                course_program="Bachelor of Science in Information Technology",
+                school_university="Liceo",
+            )
+        )
+    )
+    assert "information technology" in text
+    assert "bachelor" not in text  # degree scaffolding removed
+
+
+def test_applicant_course_text_empty_without_course() -> None:
+    assert applicant_course_text(_applicant(educational_background=None)) == ""  # type: ignore[arg-type]
+
+
+def test_job_course_text_strips_degree_framing() -> None:
+    job = SimpleNamespace(course_program="BS Information Technology")
+    assert job_course_text(job) == "information technology"  # type: ignore[arg-type]
+
+
+def test_job_course_text_empty_without_course() -> None:
+    assert job_course_text(SimpleNamespace(course_program=None)) == ""  # type: ignore[arg-type]
+
+
 def test_job_to_text_is_preprocessed() -> None:
     job = SimpleNamespace(
         title="Senior Backend Engineer",
@@ -351,10 +444,12 @@ def test_job_to_text_is_preprocessed() -> None:
         skills_required=["Python", "MongoDB"],
         experience_required="3 years",
         minimum_education_attainment=["Bachelor's Degree"],
+        course_program="BS Computer Science",
     )
     text = job_to_text(job)  # type: ignore[arg-type]
     assert "senior backend engineer" in text
     assert "mongodb" in text
+    assert "computer science" in text
     assert "." not in text
 
 

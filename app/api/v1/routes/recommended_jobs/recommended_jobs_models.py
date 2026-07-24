@@ -50,7 +50,11 @@ class RecommendedJob(Document):
     # records written before this field existed (and jobs with no requirement)
     # read as eligible.
     eligible: bool = True
-    is_relevant: bool = False
+    # Human-in-the-Loop relevance feedback, tri-state: None until an officer
+    # assesses the recommendation, then True (relevant) or False (not relevant).
+    # A freshly generated recommendation is unassessed (None) rather than
+    # implicitly "not relevant".
+    is_relevant: bool | None = None
     # No default status: a fresh recommendation is unassessed. It gains a status
     # only when an officer acts on it (referring the applicant sets REFERRED, then
     # the status advances through the Human-in-the-Loop referral lifecycle).

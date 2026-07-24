@@ -9,7 +9,7 @@ score for recommendation explainability (`key_matched`).
 """
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -35,22 +35,59 @@ def cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
 
 # --- Skills ----------------------------------------------------------------
 
+# Empirical cosine band for skill-to-skill MiniLM similarity (mirrors the
+# experience band). Identical or synonymous skills ("JavaScript" / "JS",
+# "React.js" / "React") sit near ``_SKILL_SIM_HIGH``; unrelated skills near
+# ``_SKILL_SIM_LOW``. Rescaling onto [0, 1] gives partial credit for a related
+# (not identical) applicant skill. A required skill counts as "covered" for
+# explainability once its best match clears ``_SKILL_MATCH_THRESHOLD``. Tunable.
+_SKILL_SIM_LOW = 0.35
+_SKILL_SIM_HIGH = 0.75
+_SKILL_MATCH_THRESHOLD = 0.62
+
+
+def _calibrate_skill_similarity(cosine: float) -> float:
+    """Rescale a raw skill-to-skill cosine onto a [0, 1] coverage sub-score."""
+    return max(0.0, min(1.0, (cosine - _SKILL_SIM_LOW) / (_SKILL_SIM_HIGH - _SKILL_SIM_LOW)))
+
 
 def skills_match(
-    applicant_skills: Sequence[str], required_skills: Sequence[str]
+    applicant_skills: Sequence[str],
+    required_skills: Sequence[str],
+    similarities: Mapping[str, float] | None = None,
 ) -> tuple[float, list[str]]:
     """Fraction of the job's required skills the applicant has.
 
-    Case-insensitive exact token match. Returns ``(score, matched)`` where
-    ``matched`` lists the satisfied required skills (for explainability). A job
+    A required skill is satisfied by a case-insensitive exact token match or —
+    when ``similarities`` is supplied — by a semantically related applicant
+    skill. ``similarities`` maps each required skill (stripped) to the best
+    MiniLM cosine against any applicant skill (computed by the caller, keeping
+    this module model-free), so "JS" can satisfy a "JavaScript" requirement.
+    Each required skill contributes a [0, 1] coverage sub-score — 1.0 for an
+    exact match, else the calibrated similarity — and the returned score
+    averages them. ``matched`` lists the satisfied required skills (exact plus
+    semantic matches clearing the threshold) for explainability. Without
+    ``similarities`` this reduces to the original exact-token behavior. A job
     with no required skills is treated as no constraint (1.0).
     """
     required = [skill.strip() for skill in required_skills if skill.strip()]
     if not required:
         return 1.0, []
     have = {skill.strip().lower() for skill in applicant_skills if skill.strip()}
-    matched = [skill for skill in required if skill.lower() in have]
-    return len(matched) / len(required), matched
+    sub_scores: list[float] = []
+    matched: list[str] = []
+    for skill in required:
+        if skill.lower() in have:
+            sub_scores.append(1.0)
+            matched.append(skill)
+        elif similarities is not None:
+            cosine = similarities.get(skill, 0.0)
+            sub_scores.append(_calibrate_skill_similarity(cosine))
+            if cosine >= _SKILL_MATCH_THRESHOLD:
+                matched.append(skill)
+        else:
+            sub_scores.append(0.0)
+    return sum(sub_scores) / len(required), matched
 
 
 # --- Experience ------------------------------------------------------------
@@ -222,26 +259,57 @@ def _education_rank(text: str | None) -> int | None:
 
 
 def education_match(
-    highest_level: str | None, required_levels: Sequence[str]
+    highest_level: str | None,
+    required_levels: Sequence[str],
+    course_similarity: float | None = None,
 ) -> tuple[float, str | None]:
-    """Whether the applicant's education meets the job's minimum requirement.
+    """Whether the applicant's education meets the job's requirement.
 
-    Uses an ordinal education ladder. Returns 1.0 when the applicant meets or
-    exceeds the lowest required level, a partial ratio when below, and 1.0 when
-    the job states no recognizable requirement. Returns ``(score, reason)``.
+    Averages whichever of two independent components the job specifies:
+
+    * **Level** — an ordinal comparison of the applicant's highest education
+      level against the job's minimum attainment ladder: 1.0 when the applicant
+      meets/exceeds the lowest required level, a partial ratio when below, 0.0
+      when the applicant's level is unrecognized.
+    * **Course/program** — a calibrated semantic similarity between the job's
+      preferred course of study and the applicant's, supplied as a raw MiniLM
+      cosine via ``course_similarity`` (the embedding is computed by the
+      caller, mirroring the qualitative experience match).
+
+    When the job states neither a recognizable level nor a course the
+    requirement is treated as no constraint (1.0). Returns ``(score, reason)``
+    with ``reason`` set to the applicant's level only when the level is met.
     """
+    # Ordinal minimum-education-level component.
     required_ranks = [
         rank for rank in (_education_rank(level) for level in required_levels) if rank is not None
     ]
+    level_score: float | None
+    level_reason: str | None = None
     if not required_ranks:
+        level_score = None
+    else:
+        required_rank = min(required_ranks)
+        applicant_rank = _education_rank(highest_level)
+        if applicant_rank is None:
+            level_score = 0.0
+        elif applicant_rank >= required_rank:
+            level_score = 1.0
+            level_reason = highest_level
+        else:
+            level_score = applicant_rank / required_rank
+
+    # Course/program field-of-study component. Reuses the experience match's
+    # MiniLM calibration band since both compare the same sentence model's
+    # cosines onto a [0, 1] sub-score.
+    course_score = (
+        _calibrate_similarity(course_similarity) if course_similarity is not None else None
+    )
+
+    components = [score for score in (level_score, course_score) if score is not None]
+    if not components:
         return 1.0, None
-    required_rank = min(required_ranks)
-    applicant_rank = _education_rank(highest_level)
-    if applicant_rank is None:
-        return 0.0, None
-    if applicant_rank >= required_rank:
-        return 1.0, highest_level
-    return applicant_rank / required_rank, None
+    return sum(components) / len(components), level_reason
 
 
 # --- Location --------------------------------------------------------------

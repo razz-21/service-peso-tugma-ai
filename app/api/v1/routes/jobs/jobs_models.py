@@ -24,6 +24,7 @@ class Job(Document):
     title: str
     description: str | None = None
     minimum_education_attainment: list[str] = Field(default_factory=list)
+    course_program: str | None = None
     experience_required: str | None = None
     skills_required: list[str] = Field(default_factory=list)
     no_of_vacancies: int = 0

@@ -9,9 +9,11 @@ from app.matching.embeddings import embed, embed_batch
 from app.matching.preprocessing import strip_degree_framing
 from app.matching.primary_requirements import eligibility_matches, meets_primary_requirements
 from app.matching.profile import (
+    applicant_course_text,
     applicant_experience_text,
     applicant_experience_years,
     applicant_to_text,
+    job_course_text,
     job_to_text,
 )
 from app.matching.scoring import (
@@ -246,6 +248,16 @@ async def generate_recommendations(
     # experience match. None when the applicant has no experience/education text
     # on file — a qualitative requirement then scores 0 (no evidence).
     applicant_experience_vec = embed(applicant_experience) if applicant_experience else None
+    # Embedding of the applicant's course/program (field of study), for the
+    # education dimension's course match. None when no course is on file — a
+    # job's course requirement then scores 0 (no evidence).
+    applicant_course = applicant_course_text(applicant)
+    applicant_course_vec = embed(applicant_course) if applicant_course else None
+    # Applicant skill vectors (once) for the semantic skills match: a required
+    # skill is credited by an exact match or a sufficiently similar applicant
+    # skill (e.g. "JS" for "JavaScript"), embedded with the same MiniLM model.
+    applicant_skill_names = [skill.strip() for skill in applicant.technical_skills if skill.strip()]
+    applicant_skill_vecs = embed_batch(applicant_skill_names) if applicant_skill_names else []
     highest_education = (
         applicant.educational_background.highest_education_level
         if applicant.educational_background is not None
@@ -304,10 +316,50 @@ async def generate_recommendations(
     qual_vectors = embed_batch([job_qual_terms[job.id] or "" for job in qual_jobs])
     job_qual_vec = {job.id: vec for job, vec in zip(qual_jobs, qual_vectors, strict=True)}
 
+    # Embed each job's preferred course/program (field-of-study wording) in one
+    # batch, so the per-job loop can cosine-compare it to the applicant's course
+    # for the education dimension without re-encoding. Degree framing is stripped
+    # (see job_course_text) so disciplines contrast rather than shared diploma
+    # scaffolding. Jobs that name no course are skipped.
+    job_course_terms = {job.id: job_course_text(job) for job in jobs}
+    course_jobs = [job for job in jobs if job_course_terms[job.id]]
+    course_vectors = embed_batch([job_course_terms[job.id] for job in course_jobs])
+    job_course_vec = {job.id: vec for job, vec in zip(course_jobs, course_vectors, strict=True)}
+
+    # Embed the unique required skills across all candidate jobs once, so the
+    # per-job loop can cosine-match each against the applicant's skills (for the
+    # semantic skills score) without re-encoding. Only needed when the applicant
+    # lists skills; otherwise the skills match falls back to exact tokens.
+    required_skill_vecs: dict[str, list[float]] = {}
+    if applicant_skill_vecs:
+        unique_required = sorted(
+            {skill.strip() for job in jobs for skill in job.skills_required if skill.strip()}
+        )
+        if unique_required:
+            skill_vectors = embed_batch(unique_required)
+            required_skill_vecs = dict(zip(unique_required, skill_vectors, strict=True))
+
     scored: list[tuple[Job, RecommendationScores, int, list[str]]] = []
     for job in jobs:
         semantic = cosine_similarity(applicant_vec, job.embedding)
-        skills, matched_skills = skills_match(applicant.technical_skills, job.skills_required)
+        # Best cosine of each required skill against the applicant's skills, for
+        # the semantic (MiniLM) skills match. None when the applicant lists no
+        # skills — skills_match then falls back to exact-token matching.
+        skill_similarities: dict[str, float] | None = None
+        if applicant_skill_vecs and required_skill_vecs:
+            skill_similarities = {}
+            for skill in job.skills_required:
+                key = skill.strip()
+                required_vec = required_skill_vecs.get(key)
+                if required_vec is None:
+                    continue
+                skill_similarities[key] = max(
+                    (cosine_similarity(required_vec, av) for av in applicant_skill_vecs),
+                    default=0.0,
+                )
+        skills, matched_skills = skills_match(
+            applicant.technical_skills, job.skills_required, skill_similarities
+        )
         qualitative_similarity: float | None = None
         if job_qual_terms[job.id] is not None:
             qual_vec = job_qual_vec.get(job.id)
@@ -321,8 +373,16 @@ async def generate_recommendations(
             parse_required_years(job.experience_required),
             qualitative_similarity,
         )
+        course_similarity: float | None = None
+        if job_course_terms[job.id]:
+            course_vec = job_course_vec.get(job.id)
+            course_similarity = (
+                cosine_similarity(applicant_course_vec, course_vec)
+                if applicant_course_vec is not None and course_vec is not None
+                else 0.0
+            )
         education, education_reason = education_match(
-            highest_education, job.minimum_education_attainment
+            highest_education, job.minimum_education_attainment, course_similarity
         )
         location, location_reason = location_match(applicant.preferred_work_location, job.location)
         breakdown = ScoreBreakdown(

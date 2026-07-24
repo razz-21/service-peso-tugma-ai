@@ -32,6 +32,7 @@ class JobBase(BaseModel):
     title: str = Field(min_length=1, max_length=TITLE_MAX)
     description: str | None = None
     minimum_education_attainment: list[str] = Field(default_factory=list)
+    course_program: str | None = None
     experience_required: str | None = None
     skills_required: list[str] = Field(default_factory=list)
     # Read-side bound is `ge=0`: a job whose vacancies were all consumed by
@@ -61,6 +62,7 @@ class JobCreate(BaseModel):
     title: str = Field(min_length=1, max_length=TITLE_MAX)
     description: str | None = None
     minimum_education_attainment: list[str] = Field(default_factory=list)
+    course_program: str | None = None
     experience_required: str | None = None
     skills_required: list[str] = Field(default_factory=list)
     no_of_vacancies: int = Field(default=1, ge=1, le=VACANCIES_MAX)
@@ -78,6 +80,7 @@ class JobPatch(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=TITLE_MAX)
     description: str | None = None
     minimum_education_attainment: list[str] | None = None
+    course_program: str | None = None
     experience_required: str | None = None
     skills_required: list[str] | None = None
     no_of_vacancies: int | None = Field(default=None, ge=1, le=VACANCIES_MAX)

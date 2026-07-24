@@ -63,35 +63,51 @@ def job_to_text(job: Job) -> str:
         parts.append(job.experience_required)
     if job.minimum_education_attainment:
         parts.append(" ".join(job.minimum_education_attainment))
+    if job.course_program:
+        parts.append(job.course_program)
     return preprocess(_join(parts))
 
 
 def applicant_experience_text(applicant: Applicant) -> str:
-    """Preprocessed text of the applicant's experience and qualifications.
+    """Preprocessed text of the applicant's *work* experience (roles/companies).
 
-    Concatenates work positions/companies and educational level/course — the
-    fields a free-text experience requirement (a role or a field of study) is
-    matched against semantically. The education portion has its degree framing
-    stripped (so a field-of-study requirement compares "Information Technology"
-    vs "Logistics", not the shared "Bachelor of Science / Degree" scaffolding),
-    while work text is left intact so role titles like "Field Engineer" survive.
-    Empty when the applicant has neither, which the caller treats as "no
-    evidence" for a qualitative requirement.
+    Concatenates work positions and companies — the fields a free-text
+    experience requirement (a role or field of work) is matched against
+    semantically, so role titles like "Field Engineer" survive. Education and
+    course of study are deliberately excluded here: a course requirement is
+    scored by the education dimension instead (see ``education_match`` and
+    ``applicant_course_text``), keeping experience about work history alone.
+    Empty when the applicant has no work history, which the caller treats as
+    "no evidence" for a qualitative experience requirement.
     """
     work_parts = [
         _join([experience.position or "", experience.company or ""])
         for experience in applicant.work_experience
     ]
-    work_text = preprocess(_join(work_parts))
+    return preprocess(_join(work_parts))
+
+
+def applicant_course_text(applicant: Applicant) -> str:
+    """Field-of-study text for the applicant's course/program, for the education
+    dimension's course match.
+
+    Degree framing is stripped (so "Bachelor of Science in Information
+    Technology" contrasts as "Information Technology") to compare disciplines
+    rather than shared diploma scaffolding. Empty when no course is on file,
+    which the caller treats as "no evidence" for a job's course requirement.
+    """
     education = applicant.educational_background
-    education_text = (
-        strip_degree_framing(
-            _join([education.highest_education_level or "", education.course_program or ""])
-        )
-        if education is not None
-        else ""
-    )
-    return " ".join(text for text in (work_text, education_text) if text)
+    if education is None or not education.course_program:
+        return ""
+    return strip_degree_framing(education.course_program)
+
+
+def job_course_text(job: Job) -> str:
+    """Field-of-study text for the job's preferred course/program (degree
+    framing stripped). Empty when the job names no course requirement."""
+    if not job.course_program:
+        return ""
+    return strip_degree_framing(job.course_program)
 
 
 def applicant_experience_years(applicant: Applicant) -> float:

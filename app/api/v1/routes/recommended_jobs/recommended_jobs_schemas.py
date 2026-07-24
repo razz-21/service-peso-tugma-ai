@@ -56,6 +56,7 @@ class RecommendedJobJob(BaseModel):
     skills_required: list[str] = Field(default_factory=list)
     experience_required: str | None = None
     minimum_education_attainment: list[str] = Field(default_factory=list)
+    course_program: str | None = None
     age_range: str | None = None
     sex: str | None = None
     civil_status: list[str] = Field(default_factory=list)
@@ -73,7 +74,8 @@ class RecommendedJobBase(BaseModel):
     scores: RecommendationScores = Field(default_factory=RecommendationScores)
     score: int = Field(default=0, ge=0, le=100)
     eligible: bool = True
-    is_relevant: bool = False
+    # Tri-state relevance feedback: None until assessed, then True/False.
+    is_relevant: bool | None = None
     status: RecommendedJobStatus | None = None
     embedded_applicant: list[float] = Field(default_factory=list)
     embedded_job: list[float] = Field(default_factory=list)
@@ -98,7 +100,8 @@ class RecommendedJobCreate(BaseModel):
     applicant_id: UUID
     scores: RecommendationScores = Field(default_factory=RecommendationScores)
     score: int = Field(default=0, ge=0, le=100)
-    is_relevant: bool = False
+    # Tri-state relevance feedback: None (unassessed) until an officer assesses it.
+    is_relevant: bool | None = None
     status: RecommendedJobStatus | None = None
     embedded_applicant: list[float] = Field(default_factory=list)
     embedded_job: list[float] = Field(default_factory=list)
