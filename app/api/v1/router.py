@@ -11,6 +11,7 @@ from app.api.v1.routes import (
     jobs,
     me,
     recommended_jobs,
+    reports,
     users,
     workspaces,
 )
@@ -51,4 +52,7 @@ api_router.include_router(
     prefix="/applicant-jobs",
     tags=["applicant_jobs"],
     dependencies=auth_required,
+)
+api_router.include_router(
+    reports.router, prefix="/reports", tags=["reports"], dependencies=auth_required
 )
