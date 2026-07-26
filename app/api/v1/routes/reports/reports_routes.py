@@ -7,7 +7,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from app.api.deps import get_current_workspace_id
 
 from . import reports_service
-from .reports_schemas import ApplicantReferredReport, JobSolicitedReport
+from .reports_schemas import (
+    ApplicantPlacedReport,
+    ApplicantReferredReport,
+    ApplicantRegisteredReport,
+    EstablishmentsRegisteredReport,
+    JobSolicitedReport,
+)
 
 router = APIRouter()
 
@@ -45,5 +51,41 @@ async def get_applicant_referred(
 ) -> ApplicantReferredReport:
     start, end = _resolve_window(start_date, end_date)
     return await reports_service.get_applicant_referred(
+        workspace_id=workspace_id, start_date=start, end_date=end
+    )
+
+
+@router.get("/applicant-placed", response_model=ApplicantPlacedReport)
+async def get_applicant_placed(
+    workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+    start_date: Annotated[date | None, Query()] = None,
+    end_date: Annotated[date | None, Query()] = None,
+) -> ApplicantPlacedReport:
+    start, end = _resolve_window(start_date, end_date)
+    return await reports_service.get_applicant_placed(
+        workspace_id=workspace_id, start_date=start, end_date=end
+    )
+
+
+@router.get("/applicant-registered", response_model=ApplicantRegisteredReport)
+async def get_applicant_registered(
+    workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+    start_date: Annotated[date | None, Query()] = None,
+    end_date: Annotated[date | None, Query()] = None,
+) -> ApplicantRegisteredReport:
+    start, end = _resolve_window(start_date, end_date)
+    return await reports_service.get_applicant_registered(
+        workspace_id=workspace_id, start_date=start, end_date=end
+    )
+
+
+@router.get("/establishments-registered", response_model=EstablishmentsRegisteredReport)
+async def get_establishments_registered(
+    workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+    start_date: Annotated[date | None, Query()] = None,
+    end_date: Annotated[date | None, Query()] = None,
+) -> EstablishmentsRegisteredReport:
+    start, end = _resolve_window(start_date, end_date)
+    return await reports_service.get_establishments_registered(
         workspace_id=workspace_id, start_date=start, end_date=end
     )

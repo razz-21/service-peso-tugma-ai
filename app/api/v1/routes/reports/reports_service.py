@@ -1,6 +1,7 @@
+from collections import Counter
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, time, timedelta
-from typing import Any
+from typing import Any, Protocol
 from uuid import UUID
 
 from beanie.operators import NE, In
@@ -10,21 +11,33 @@ from app.api.v1.routes.applicants.applicants_models import (
     Address,
     Applicant,
     EducationalBackground,
+    PreferredOccupationIndustry,
+    Sex,
 )
-from app.api.v1.routes.companies.companies_models import Company
-from app.api.v1.routes.jobs.jobs_models import Job
+from app.api.v1.routes.companies.companies_models import Company, CompanyType
+from app.api.v1.routes.jobs.jobs_models import Job, JobStatus
 from app.api.v1.routes.recommended_jobs.recommended_jobs_models import (
     RecommendedJob,
     RecommendedJobStatus,
 )
 
 from .reports_schemas import (
+    ApplicantPlacedReport,
+    ApplicantPlacedRow,
     ApplicantReferredReport,
     ApplicantReferredRow,
+    ApplicantRegisteredReport,
+    ApplicantRegisteredRow,
+    EstablishmentRow,
+    EstablishmentsRegisteredReport,
     JobSolicitedReport,
     JobSolicitedRow,
+    LabeledCount,
     MonthlyCount,
+    NewEstablishmentsCard,
+    NewRegistrantsCard,
     TopOccupation,
+    TopPlacedPosition,
     VacanciesSolicitedCard,
 )
 
@@ -299,12 +312,13 @@ def _referred() -> Mapping[Any, Any]:
 
 
 class _ReferralDoc(BaseModel):
-    # Projection over `recommended_jobs` for the referral log — excludes the heavy
-    # `embedded_applicant` / `embedded_job` vectors.
+    # Projection over `recommended_jobs` for the referral / placement logs —
+    # excludes the heavy `embedded_applicant` / `embedded_job` vectors.
     job_id: UUID
     applicant_id: UUID | None = None
     status: str | None = None
     created_at: str
+    updated_at: str
 
 
 class _ApplicantRefDoc(BaseModel):
@@ -371,7 +385,14 @@ def _age_from_dob(dob: str | None) -> int | None:
     return years if years >= 0 else None
 
 
-def _applicant_name(applicant: _ApplicantRefDoc) -> str | None:
+class _Named(Protocol):
+    firstname: str
+    lastname: str
+    middlename: str | None
+    suffix: str | None
+
+
+def _applicant_name(applicant: _Named) -> str | None:
     # Full name from the parts, skipping any that are blank.
     parts = [
         applicant.firstname,
@@ -395,11 +416,15 @@ def _address_str(address: Address) -> str | None:
     return joined or None
 
 
-async def _referral_rows(
+async def _resolve_refs(
     workspace_id: UUID, referrals: list[_ReferralDoc]
-) -> list[ApplicantReferredRow]:
-    # Resolve each referral's applicant + job (+ company) in three batched queries,
-    # then assemble one table row per referral (newest first).
+) -> tuple[
+    dict[UUID, _ApplicantRefDoc],
+    dict[UUID, _JobPositionDoc],
+    dict[UUID, str],
+]:
+    # Resolve the applicants, jobs and company names referenced by a batch of
+    # referrals in three batched queries (shared by the referral/placement logs).
     applicant_ids = list({r.applicant_id for r in referrals if r.applicant_id})
     job_ids = list({r.job_id for r in referrals})
 
@@ -432,6 +457,14 @@ async def _referral_rows(
         else []
     )
     company_name_by_id = {c.id: c.company_name for c in companies}
+    return applicant_by_id, job_by_id, company_name_by_id
+
+
+async def _referral_rows(
+    workspace_id: UUID, referrals: list[_ReferralDoc]
+) -> list[ApplicantReferredRow]:
+    # Assemble one table row per referral, ordered by applicant name below.
+    applicant_by_id, job_by_id, company_name_by_id = await _resolve_refs(workspace_id, referrals)
 
     rows: list[ApplicantReferredRow] = []
     for referral in referrals:
@@ -504,5 +537,395 @@ async def get_applicant_referred(
         to_interview_pct=to_interview_pct,
         total_referrals=total_referrals,
         monthly=monthly,
+        rows=rows,
+    )
+
+
+# --- Applicant Placed ------------------------------------------------------
+
+# A placement is a referral that reached HIRED. Placements carry no dedicated
+# hire timestamp, so `updated_at` (bumped on the HIRED transition) is the hire
+# time — matching the dashboard's placement counting.
+
+
+def _hired() -> Mapping[Any, Any] | bool:
+    # Built lazily inside a function, not at import time: Beanie's field
+    # expressions aren't available until the models are initialised.
+    return RecommendedJob.status == RecommendedJobStatus.HIRED
+
+
+async def _placements_monthly(workspace_id: UUID, year: int) -> list[MonthlyCount]:
+    # Placements per calendar month across the whole `year`, by hire time
+    # (`updated_at`), grouped on the ISO string's month digits (chars 5-6).
+    lo = _day_start_iso(date(year, 1, 1))
+    hi = _day_start_iso(date(year + 1, 1, 1))
+    rows = (
+        await RecommendedJob.find(
+            RecommendedJob.workspace_id == workspace_id,
+            RecommendedJob.updated_at >= lo,
+            RecommendedJob.updated_at < hi,
+            _hired(),
+        )
+        .aggregate(
+            [{"$group": {"_id": {"$substrBytes": ["$updated_at", 5, 2]}, "count": {"$sum": 1}}}]
+        )
+        .to_list()
+    )
+    counts = {int(row["_id"]): int(row["count"]) for row in rows if row["_id"]}
+    return _month_series(year, counts)
+
+
+async def _placement_rows(
+    workspace_id: UUID, placements: list[_ReferralDoc]
+) -> list[ApplicantPlacedRow]:
+    # Assemble one table row per placement, ordered by applicant name below.
+    applicant_by_id, job_by_id, company_name_by_id = await _resolve_refs(workspace_id, placements)
+
+    rows: list[ApplicantPlacedRow] = []
+    for placement in placements:
+        applicant = applicant_by_id.get(placement.applicant_id) if placement.applicant_id else None
+        job = job_by_id.get(placement.job_id)
+        education = applicant.educational_background if applicant else None
+        rows.append(
+            ApplicantPlacedRow(
+                name=_applicant_name(applicant) if applicant else None,
+                address=_address_str(applicant.present_address) if applicant else None,
+                skills=applicant.technical_skills if applicant else [],
+                gender=applicant.sex if applicant else None,
+                civil_status=applicant.civil_status if applicant else None,
+                age=_age_from_dob(applicant.date_of_birth) if applicant else None,
+                education=education.highest_education_level if education else None,
+                course_program=education.course_program if education else None,
+                position=job.title if job else None,
+                date_placed=placement.updated_at,
+                contact_number=applicant.primary_mobile_number if applicant else None,
+                company_placed=company_name_by_id.get(job.company_id) if job else None,
+                city_province_address=None,
+            )
+        )
+
+    rows.sort(key=lambda row: (row.name is None, (row.name or "").casefold()))
+    return rows
+
+
+def _top_placed_position(rows: list[ApplicantPlacedRow]) -> TopPlacedPosition:
+    # The position accounting for the most placements in the window.
+    counts = Counter(row.position for row in rows if row.position)
+    if not counts:
+        return TopPlacedPosition(position=None, placements=0)
+    position, placements = counts.most_common(1)[0]
+    return TopPlacedPosition(position=position, placements=placements)
+
+
+async def get_applicant_placed(
+    workspace_id: UUID, start_date: date, end_date: date
+) -> ApplicantPlacedReport:
+    # Cohort = placements (HIRED) whose hire event falls in the window. The
+    # summary cards derive from this set; `total_placements` is an all-time count
+    # and the chart spans the window's whole end year.
+    start_iso = _day_start_iso(start_date)
+    end_iso = _day_start_iso(end_date + timedelta(days=1))
+
+    placements = (
+        await RecommendedJob.find(
+            RecommendedJob.workspace_id == workspace_id,
+            RecommendedJob.updated_at >= start_iso,
+            RecommendedJob.updated_at < end_iso,
+            _hired(),
+        )
+        .project(_ReferralDoc)
+        .sort("-updated_at")
+        .to_list()
+    )
+
+    placements_made = len(placements)
+    unique_applicants = len({p.applicant_id for p in placements if p.applicant_id})
+
+    total_placements = await RecommendedJob.find(
+        RecommendedJob.workspace_id == workspace_id, _hired()
+    ).count()
+
+    monthly = await _placements_monthly(workspace_id, end_date.year)
+    rows = await _placement_rows(workspace_id, placements)
+    top_position = _top_placed_position(rows)
+
+    return ApplicantPlacedReport(
+        start_date=start_date,
+        end_date=end_date,
+        placements_made=placements_made,
+        unique_applicants=unique_applicants,
+        top_position=top_position,
+        total_placements=total_placements,
+        monthly=monthly,
+        rows=rows,
+    )
+
+
+# --- Applicant Registered --------------------------------------------------
+
+
+class _RegistrantDoc(BaseModel):
+    # Projection over `applicants` for the registration log — excludes the heavy
+    # `resume_text` / `files`. `id` is aliased to Mongo's `_id`.
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: UUID = Field(alias="_id")
+    firstname: str
+    lastname: str
+    middlename: str | None = None
+    suffix: str | None = None
+    sex: str | None = None
+    date_of_birth: str | None = None
+    educational_background: EducationalBackground | None = None
+    preferred_occupation_industry: list[PreferredOccupationIndustry] = Field(default_factory=list)
+    created_at: str
+
+
+class _ActiveApplicantDoc(BaseModel):
+    # Minimal projection — just the applicant a referral belongs to.
+    applicant_id: UUID | None = None
+
+
+def _percent_change(current: int, previous: int) -> float | None:
+    # Period-over-period change; None when the prior window is empty (no baseline).
+    if previous <= 0:
+        return None
+    return round((current - previous) / previous * 100, 1)
+
+
+def _desired_roles(registrant: _RegistrantDoc) -> list[str]:
+    # Every preferred occupation the applicant listed (skipping blank entries).
+    return [poi.occupation for poi in registrant.preferred_occupation_industry if poi.occupation]
+
+
+async def _registrations_monthly(workspace_id: UUID, year: int) -> list[MonthlyCount]:
+    # Registrations per calendar month across the whole `year`, grouped on the
+    # ISO string's month digits (chars 5-6).
+    lo = _day_start_iso(date(year, 1, 1))
+    hi = _day_start_iso(date(year + 1, 1, 1))
+    rows = (
+        await Applicant.find(
+            Applicant.workspace_id == workspace_id,
+            Applicant.created_at >= lo,
+            Applicant.created_at < hi,
+        )
+        .aggregate(
+            [{"$group": {"_id": {"$substrBytes": ["$created_at", 5, 2]}, "count": {"$sum": 1}}}]
+        )
+        .to_list()
+    )
+    counts = {int(row["_id"]): int(row["count"]) for row in rows if row["_id"]}
+    return _month_series(year, counts)
+
+
+async def _active_applicant_ids(workspace_id: UUID, applicant_ids: list[UUID]) -> set[UUID]:
+    # Which of these applicants have been acted on (have a referral with a set
+    # status) — they read as "Active" rather than "New".
+    if not applicant_ids:
+        return set()
+    refs = (
+        await RecommendedJob.find(
+            In(RecommendedJob.applicant_id, applicant_ids),
+            RecommendedJob.workspace_id == workspace_id,
+            _referred(),
+        )
+        .project(_ActiveApplicantDoc)
+        .to_list()
+    )
+    return {ref.applicant_id for ref in refs if ref.applicant_id}
+
+
+async def get_applicant_registered(
+    workspace_id: UUID, start_date: date, end_date: date
+) -> ApplicantRegisteredReport:
+    # Cohort = applicants registered in the window. Summary cards derive from this
+    # set; `total_registrants` is all-time and the chart spans the whole end year.
+    length_days = (end_date - start_date).days + 1
+    start_iso = _day_start_iso(start_date)
+    end_iso = _day_start_iso(end_date + timedelta(days=1))
+    prev_start_iso = _day_start_iso(start_date - timedelta(days=length_days))
+
+    registrants = (
+        await Applicant.find(
+            Applicant.workspace_id == workspace_id,
+            Applicant.created_at >= start_iso,
+            Applicant.created_at < end_iso,
+        )
+        .project(_RegistrantDoc)
+        .sort("-created_at")
+        .to_list()
+    )
+
+    new_count = len(registrants)
+    prev_count = await Applicant.find(
+        Applicant.workspace_id == workspace_id,
+        Applicant.created_at >= prev_start_iso,
+        Applicant.created_at < start_iso,
+    ).count()
+    total_registrants = await Applicant.find(Applicant.workspace_id == workspace_id).count()
+
+    female = sum(1 for r in registrants if r.sex == Sex.FEMALE.value)
+    male = sum(1 for r in registrants if r.sex == Sex.MALE.value)
+    female_pct = round(female / new_count * 100, 1) if new_count else 0.0
+    male_pct = round(male / new_count * 100, 1) if new_count else 0.0
+
+    monthly = await _registrations_monthly(workspace_id, end_date.year)
+    active_ids = await _active_applicant_ids(workspace_id, [r.id for r in registrants])
+
+    rows = [
+        ApplicantRegisteredRow(
+            name=_applicant_name(registrant),
+            age=_age_from_dob(registrant.date_of_birth),
+            sex=registrant.sex,
+            education=(
+                registrant.educational_background.highest_education_level
+                if registrant.educational_background
+                else None
+            ),
+            course_program=(
+                registrant.educational_background.course_program
+                if registrant.educational_background
+                else None
+            ),
+            school_university=(
+                registrant.educational_background.school_university
+                if registrant.educational_background
+                else None
+            ),
+            desired_roles=_desired_roles(registrant),
+            registered=registrant.created_at,
+            status="Active" if registrant.id in active_ids else "New",
+        )
+        for registrant in registrants
+    ]
+
+    return ApplicantRegisteredReport(
+        start_date=start_date,
+        end_date=end_date,
+        new_registrants=NewRegistrantsCard(
+            value=new_count, change_pct=_percent_change(new_count, prev_count)
+        ),
+        total_registrants=total_registrants,
+        female_pct=female_pct,
+        male_pct=male_pct,
+        monthly=monthly,
+        rows=rows,
+    )
+
+
+# --- Establishments Registered ---------------------------------------------
+
+# Display label per business type; matches the report mock's abbreviations.
+_TYPE_LABELS = {
+    CompanyType.SOLE_PROPRIETORSHIP: "Sole Prop.",
+    CompanyType.PARTNERSHIP: "Partnership",
+    CompanyType.CORPORATION: "Corporation",
+    CompanyType.COOPERATIVE: "Cooperative",
+    CompanyType.GOVERNMENT: "Government",
+}
+
+
+def _type_label(value: str | None) -> str:
+    if value is None:
+        return "—"
+    try:
+        return _TYPE_LABELS[CompanyType(value)]
+    except ValueError:
+        return value
+
+
+class _CompanyDoc(BaseModel):
+    # Projection over `companies` for the directory — excludes description/avatar.
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: UUID = Field(alias="_id")
+    company_name: str
+    company_type: str | None = None
+    address: str | None = None
+    contact_number: str | None = None
+    email: str | None = None
+    created_at: str
+
+
+async def _jobs_posted_by_company(workspace_id: UUID) -> dict[UUID, int]:
+    # Total jobs posted per company, in one aggregation.
+    rows = (
+        await Job.find(Job.workspace_id == workspace_id)
+        .aggregate([{"$group": {"_id": "$company_id", "count": {"$sum": 1}}}])
+        .to_list()
+    )
+    return {row["_id"]: int(row["count"]) for row in rows if row["_id"] is not None}
+
+
+async def _companies_with_active_jobs(workspace_id: UUID) -> int:
+    # Number of distinct companies that have at least one active job.
+    rows = (
+        await Job.find(
+            Job.workspace_id == workspace_id,
+            Job.status == JobStatus.ACTIVE,
+        )
+        .aggregate([{"$group": {"_id": "$company_id"}}, {"$count": "total"}])
+        .to_list()
+    )
+    return int(rows[0]["total"]) if rows else 0
+
+
+def _by_type(companies: list[_CompanyDoc]) -> list[LabeledCount]:
+    # All-time breakdown by business type. Every type is emitted in a fixed order
+    # (defaulting to 0) so the chart always shows the full set of categories.
+    counts = Counter(company.company_type for company in companies)
+    return [
+        LabeledCount(label=_TYPE_LABELS[company_type], count=counts.get(company_type.value, 0))
+        for company_type in CompanyType
+    ]
+
+
+async def get_establishments_registered(
+    workspace_id: UUID, start_date: date, end_date: date
+) -> EstablishmentsRegisteredReport:
+    # Most figures here are all-time (total, corporations, active-jobs, by-type,
+    # directory); only "new this period" is scoped to the selected window.
+    length_days = (end_date - start_date).days + 1
+    start_iso = _day_start_iso(start_date)
+    end_iso = _day_start_iso(end_date + timedelta(days=1))
+    prev_start_iso = _day_start_iso(start_date - timedelta(days=length_days))
+
+    companies = (
+        await Company.find(Company.workspace_id == workspace_id)
+        .project(_CompanyDoc)
+        .sort("+created_at")
+        .to_list()
+    )
+
+    total_establishments = len(companies)
+    new_count = sum(1 for c in companies if start_iso <= c.created_at < end_iso)
+    prev_count = sum(1 for c in companies if prev_start_iso <= c.created_at < start_iso)
+    change = new_count - prev_count if prev_count > 0 else None
+    corporations = sum(1 for c in companies if c.company_type == CompanyType.CORPORATION.value)
+
+    with_active_jobs = await _companies_with_active_jobs(workspace_id)
+    jobs_by_company = await _jobs_posted_by_company(workspace_id)
+
+    rows = [
+        EstablishmentRow(
+            company=company.company_name,
+            type=_type_label(company.company_type),
+            address=company.address,
+            contact_number=company.contact_number,
+            email=company.email,
+            jobs_posted=jobs_by_company.get(company.id, 0),
+            registered=company.created_at,
+        )
+        for company in companies
+    ]
+
+    return EstablishmentsRegisteredReport(
+        start_date=start_date,
+        end_date=end_date,
+        total_establishments=total_establishments,
+        new_this_period=NewEstablishmentsCard(value=new_count, change=change),
+        corporations=corporations,
+        with_active_jobs=with_active_jobs,
+        by_type=_by_type(companies),
         rows=rows,
     )
