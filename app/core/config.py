@@ -19,14 +19,20 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "peso-tugma-ai"
     API_V1_PREFIX: str = "/api/v1"
 
-    # Semantic embedding model used by the job-matching AI pipeline. Default is
-    # the paper's selected model (balanced accuracy/speed/size). Downloaded on
-    # first use by sentence-transformers and cached locally thereafter.
-    EMBEDDING_MODEL_NAME: str = "sentence-transformers/all-MiniLM-L12-v2"
-
-    # Directory where uploaded applicant files (resumes) are stored on disk.
-    # Relative paths resolve against the service's working directory.
-    UPLOAD_DIR: str = "uploads"
+    # Hosted embedding inference endpoint. The job-matching pipeline no longer
+    # loads sentence-transformers locally (torch is far too large for serverless
+    # bundles); it calls this endpoint instead, which must serve the paper's
+    # model `sentence-transformers/all-MiniLM-L12-v2` so the produced vectors —
+    # and therefore the calibrated cosine bands in matching/scoring.py — stay
+    # identical. Defaults to the Hugging Face Inference API for that model.
+    EMBEDDING_API_URL: str = (
+        "https://router.huggingface.co/hf-inference/models/"
+        "sentence-transformers/all-MiniLM-L12-v2/pipeline/feature-extraction"
+    )
+    # Bearer token for the embedding endpoint (HF token by default). Required in
+    # practice — the public HF Inference API rejects unauthenticated requests.
+    EMBEDDING_API_TOKEN: str = ""
+    EMBEDDING_API_TIMEOUT: float = 30.0
 
     CORS_ORIGINS: str = "http://localhost:3000"
 

@@ -17,6 +17,9 @@ env/
 # uv
 .uv/
 
+# FastAPI Cloud (links a local dir to ONE app; CI selects the app via FASTAPI_CLOUD_APP_ID)
+.fastapicloud/
+
 # Env files
 .env
 .env.local

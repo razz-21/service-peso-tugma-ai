@@ -1,11 +1,11 @@
+import asyncio
 import re
 from datetime import UTC, datetime
-from pathlib import Path
 from uuid import UUID, uuid4
 
+import vercel_blob
 from beanie.operators import Or, RegEx
 
-from app.core.config import settings
 from app.matching.extraction import extract_text
 
 from .applicants_extraction import parse_resume
@@ -78,22 +78,28 @@ async def add_applicant_file(
 ) -> Applicant:
     """Persist an uploaded file for the applicant and record the raw resume text.
 
-    Stores the bytes on disk under `UPLOAD_DIR/<applicant_id>/<file_id>.pdf`,
-    appends an embedded `ApplicantFile`, and sets `resume_text` (fed into the
-    matcher's semantic vector) when text was extracted.
+    Uploads the bytes to Vercel Blob at `applicants/<applicant_id>/<file_id>.pdf`
+    (the serverless filesystem is ephemeral/read-only), appends an embedded
+    `ApplicantFile` whose `storage_ref` is the returned Blob URL, and sets
+    `resume_text` (fed into the matcher's semantic vector) when text was extracted.
     """
     file_id = uuid4()
-    directory = Path(settings.UPLOAD_DIR) / str(applicant.id)
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"{file_id}.pdf"
-    path.write_bytes(data)
+    pathname = f"applicants/{applicant.id}/{file_id}.pdf"
+    # vercel_blob.put is synchronous (requests-based); run it off the event loop.
+    # The store's BLOB_READ_WRITE_TOKEN is read from the environment.
+    result = await asyncio.to_thread(
+        vercel_blob.put,
+        pathname,
+        data,
+        {"addRandomSuffix": "false"},
+    )
     applicant.files.append(
         ApplicantFile(
             id=file_id,
             filename=filename,
             size=len(data),
             content_type=content_type,
-            storage_ref=str(path),
+            storage_ref=result["url"],
         )
     )
     if resume_text:

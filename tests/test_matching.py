@@ -477,11 +477,11 @@ def test_applicant_experience_years_ignores_unparseable_dates() -> None:
 # --- Embeddings (no model load) --------------------------------------------
 
 
-def test_embed_batch_empty_short_circuits_without_loading_model() -> None:
+def test_embed_batch_empty_short_circuits_without_calling_api() -> None:
     from app.matching import embeddings
 
     assert embeddings.embed_batch([]) == []
-    assert embeddings._model is None  # still lazy — empty batch never loads the model
+    assert embeddings._client is None  # still lazy — empty batch never opens a client
 
 
 # --- Primary requirements --------------------------------------------------
