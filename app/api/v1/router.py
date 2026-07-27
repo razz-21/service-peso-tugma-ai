@@ -4,6 +4,7 @@ from app.api.deps import get_current_user
 from app.api.v1.routes import (
     applicant_jobs,
     applicants,
+    audit_logs,
     auth,
     companies,
     dashboard,
@@ -55,4 +56,7 @@ api_router.include_router(
 )
 api_router.include_router(
     reports.router, prefix="/reports", tags=["reports"], dependencies=auth_required
+)
+api_router.include_router(
+    audit_logs.router, prefix="/audit-logs", tags=["audit_logs"], dependencies=auth_required
 )

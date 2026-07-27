@@ -6,6 +6,7 @@ from pymongo import AsyncMongoClient
 
 from app.api.v1.routes.applicant_jobs.applicant_jobs_models import ApplicantJob
 from app.api.v1.routes.applicants.applicants_models import Applicant
+from app.api.v1.routes.audit_logs.audit_logs_models import AuditLog
 from app.api.v1.routes.companies.companies_models import Company
 from app.api.v1.routes.jobs.jobs_models import Job
 from app.api.v1.routes.recommended_jobs.recommended_jobs_models import RecommendedJob
@@ -44,6 +45,7 @@ async def init_mongo() -> None:
                 Applicant,
                 RecommendedJob,
                 ApplicantJob,
+                AuditLog,
             ],
         )
         _client = client

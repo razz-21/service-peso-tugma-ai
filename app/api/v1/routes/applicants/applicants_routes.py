@@ -4,10 +4,13 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
 from app.api.deps import get_current_user, get_current_workspace_id
+from app.api.v1.routes.audit_logs import audit_logs_service
+from app.api.v1.routes.audit_logs.audit_logs_models import AuditEntity, AuditTone
 from app.api.v1.routes.users.users_models import User
 from app.matching.extraction import ExtractionError, extract_text
 
 from . import applicants_service
+from .applicants_models import Applicant
 from .applicants_schemas import (
     ApplicantCreate,
     ApplicantList,
@@ -20,6 +23,10 @@ router = APIRouter()
 
 # Uploaded resumes must be PDFs no larger than this.
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+
+def _display_name(applicant: Applicant) -> str:
+    return f"{applicant.firstname} {applicant.lastname}".strip()
 
 
 async def _read_pdf_upload(file: UploadFile) -> bytes:
@@ -54,6 +61,17 @@ async def create_applicant(
 ) -> ApplicantRead:
     applicant = await applicants_service.create_applicant(
         data, created_by=current_user.id, workspace_id=workspace_id
+    )
+    await audit_logs_service.record_audit(
+        workspace_id=workspace_id,
+        entity=AuditEntity.APPLICANTS,
+        entity_label="Applicant",
+        actor=current_user.fullname,
+        action="registered an applicant",
+        icon="person_add",
+        icon_tone=AuditTone.GREEN,
+        chip_tone=AuditTone.GREEN,
+        records=[_display_name(applicant)],
     )
     return ApplicantRead.model_validate(applicant)
 
@@ -107,11 +125,23 @@ async def update_applicant(
     applicant_id: UUID,
     data: ApplicantPatch,
     workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> ApplicantRead:
     applicant = await applicants_service.get_applicant(applicant_id, workspace_id=workspace_id)
     if applicant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Applicant not found")
     applicant = await applicants_service.update_applicant(applicant, data)
+    await audit_logs_service.record_audit(
+        workspace_id=workspace_id,
+        entity=AuditEntity.APPLICANTS,
+        entity_label="Applicant",
+        actor=current_user.fullname,
+        action="updated an applicant",
+        icon="person",
+        icon_tone=AuditTone.GREEN,
+        chip_tone=AuditTone.GREEN,
+        records=[_display_name(applicant)],
+    )
     return ApplicantRead.model_validate(applicant)
 
 
@@ -119,15 +149,28 @@ async def update_applicant(
 async def delete_applicant(
     applicant_id: UUID,
     workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> None:
     applicant = await applicants_service.get_applicant(applicant_id, workspace_id=workspace_id)
     if applicant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Applicant not found")
+    applicant_name = _display_name(applicant)
     if not await applicants_service.delete_applicant(applicant):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete applicant",
         )
+    await audit_logs_service.record_audit(
+        workspace_id=workspace_id,
+        entity=AuditEntity.APPLICANTS,
+        entity_label="Applicant",
+        actor=current_user.fullname,
+        action="deleted an applicant",
+        icon="person_remove",
+        icon_tone=AuditTone.RED,
+        chip_tone=AuditTone.RED,
+        records=[applicant_name],
+    )
 
 
 @router.post(

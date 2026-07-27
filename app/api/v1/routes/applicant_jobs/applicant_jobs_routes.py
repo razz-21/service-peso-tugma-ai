@@ -4,6 +4,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.deps import get_current_user, get_current_workspace_id
+from app.api.v1.routes.audit_logs import audit_logs_service
+from app.api.v1.routes.audit_logs.audit_logs_models import AuditDiffRow, AuditEntity, AuditTone
 from app.matching.primary_requirements import (
     civil_status_matches,
     has_open_vacancy,
@@ -54,6 +56,20 @@ def _to_read(
         assigned_by=ApplicantJobUser.model_validate(user) if user else None,
         created_at=applicant_job.created_at,
     )
+
+
+# Maps a referral's new status to its audit (action phrase, icon, icon tone).
+_REFERRAL_STATUS_EVENT: dict[ApplicantJobStatus, tuple[str, str, AuditTone]] = {
+    ApplicantJobStatus.HIRED: ("marked an applicant as placed", "check_box", AuditTone.GREEN),
+    ApplicantJobStatus.INTERVIEW_SCHEDULED: ("scheduled an interview", "event", AuditTone.GREEN),
+    ApplicantJobStatus.WITHDRAWN: ("withdrew a referral", "undo", AuditTone.AMBER),
+    ApplicantJobStatus.NOT_HIRED: ("marked an applicant as not hired", "cancel", AuditTone.GREY),
+    ApplicantJobStatus.REFERRED: ("re-referred an applicant", "send", AuditTone.GREEN),
+}
+
+
+def _referral_status_label(status: ApplicantJobStatus) -> str:
+    return status.value.replace("_", " ").title()
 
 
 @router.post("", response_model=ApplicantJobRead, status_code=status.HTTP_201_CREATED)
@@ -116,6 +132,19 @@ async def create_applicant_job(
     )
     company = await companies_service.get_company(job.company_id, workspace_id=workspace_id)
     user = await users_service.get_user(assigned_by)
+    applicant_name = f"{applicant.firstname} {applicant.lastname}".strip()
+    await audit_logs_service.record_audit(
+        workspace_id=workspace_id,
+        entity=AuditEntity.REFERRALS,
+        entity_label="Referral",
+        actor=current_user.fullname,
+        action="referred an applicant to",
+        icon="send",
+        icon_tone=AuditTone.GREEN,
+        chip_tone=AuditTone.GREEN,
+        records=[job.title] + ([company.company_name] if company else []),
+        note=f"{applicant_name} referred to this job.",
+    )
     return _to_read(applicant_job, job, company, user)
 
 
@@ -182,6 +211,7 @@ async def update_applicant_job(
     applicant_job_id: UUID,
     data: ApplicantJobUpdate,
     workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> ApplicantJobRead:
     applicant_job = await applicant_jobs_service.get_applicant_job(
         applicant_job_id, workspace_id=workspace_id
@@ -191,9 +221,33 @@ async def update_applicant_job(
     # Fetch the job up front so the service can adjust its vacancy count when the
     # status change releases or re-consumes a seat (e.g. -> withdrawn / not hired).
     job = await jobs_service.get_job(applicant_job.job_id, workspace_id=workspace_id)
+    previous_status = applicant_job.status
     applicant_job = await applicant_jobs_service.update_status(applicant_job, data.status, job)
     company = await companies_service.get_company(
         applicant_job.company_id, workspace_id=workspace_id
     )
     user = await users_service.get_user(applicant_job.assigned_by)
+    if applicant_job.status != previous_status:
+        action, icon, icon_tone = _REFERRAL_STATUS_EVENT.get(
+            applicant_job.status,
+            ("updated a referral", "send", AuditTone.GREEN),
+        )
+        await audit_logs_service.record_audit(
+            workspace_id=workspace_id,
+            entity=AuditEntity.REFERRALS,
+            entity_label="Referral",
+            actor=current_user.fullname,
+            action=action,
+            icon=icon,
+            icon_tone=icon_tone,
+            chip_tone=AuditTone.GREEN,
+            records=([job.title] if job else []) + ([company.company_name] if company else []),
+            diff=[
+                AuditDiffRow(
+                    label="Status",
+                    from_=_referral_status_label(previous_status),
+                    to=_referral_status_label(applicant_job.status),
+                )
+            ],
+        )
     return _to_read(applicant_job, job, company, user)
