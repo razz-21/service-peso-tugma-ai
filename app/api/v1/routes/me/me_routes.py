@@ -6,6 +6,7 @@ from app.api.deps import get_current_user
 from app.api.v1.routes.users import users_service as user_service
 from app.api.v1.routes.users.users_models import User
 from app.api.v1.routes.users.users_schemas import MePatch, UserRead
+from app.core.security import verify_password
 
 router = APIRouter()
 
@@ -29,6 +30,19 @@ async def update_me(
             status_code=status.HTTP_409_CONFLICT,
             detail="Email already registered",
         )
+
+    # Changing the password requires proving knowledge of the current one.
+    if data.password is not None:
+        if not data.current_password:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Current password is required to change your password",
+            )
+        if not verify_password(data.current_password, current_user.password):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Current password is incorrect",
+            )
 
     user = await user_service.update_user(current_user, data)
     return await user_service.build_user_read(user)

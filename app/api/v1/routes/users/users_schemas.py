@@ -56,6 +56,9 @@ class MePatch(BaseModel):
     fullname: str | None = Field(default=None, min_length=1, max_length=100)
     email: EmailStr | None = None
     password: str | None = Field(default=None, min_length=8, max_length=128)
+    # Required only when changing ``password``; verified against the stored hash
+    # in the route and never persisted (``exclude`` keeps it out of dumps).
+    current_password: str | None = Field(default=None, exclude=True)
     avatar: str | None = None
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
