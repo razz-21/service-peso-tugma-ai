@@ -58,6 +58,13 @@ def create_app() -> FastAPI:
             await init_mongo()
             return await call_next(request)
 
+    # Root liveness probe. Every route lives under `API_V1_PREFIX` (/api/v1), so
+    # the bare domain would otherwise 404 — which reads as a failed deploy. This
+    # gives a cheap "is it up?" check at `/` and points at the real API.
+    @app.get("/", include_in_schema=False)
+    async def root() -> dict[str, str]:
+        return {"status": "ok", "service": settings.PROJECT_NAME, "api": settings.API_V1_PREFIX}
+
     app.include_router(api_router, prefix=settings.API_V1_PREFIX)
     return app
 
