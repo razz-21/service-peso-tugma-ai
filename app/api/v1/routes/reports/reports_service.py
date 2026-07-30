@@ -290,6 +290,7 @@ _STATUS_LABELS = {
     RecommendedJobStatus.HIRED: "Hired",
     RecommendedJobStatus.WITHDRAWN: "Withdrawn",
     RecommendedJobStatus.NOT_HIRED: "Not hired",
+    RecommendedJobStatus.RESIGNED: "Resigned",
 }
 
 

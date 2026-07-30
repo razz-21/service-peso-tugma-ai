@@ -44,6 +44,10 @@ def cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
 _SKILL_SIM_LOW = 0.35
 _SKILL_SIM_HIGH = 0.75
 _SKILL_MATCH_THRESHOLD = 0.62
+# Below the full-match bar but still clearly related: a nearby tool/skill (e.g.
+# "Google Sheets" for a required "Excel") that should surface as a distinct
+# "related" hint in the compare modal rather than a hard miss. Tunable.
+_SKILL_RELATED_THRESHOLD = 0.50
 
 
 def _calibrate_skill_similarity(cosine: float) -> float:
@@ -88,6 +92,51 @@ def skills_match(
         else:
             sub_scores.append(0.0)
     return sum(sub_scores) / len(required), matched
+
+
+# One required skill's coverage by the applicant, for the compare modal. ``state``
+# is ``"matched"`` (exact token or a strong semantic match), ``"related"`` (a
+# nearby skill worth surfacing but short of a full match), or ``"missing"``.
+# ``applicant`` names the skill that best covers it — ``None`` for an exact token
+# match (same text as ``required``) or a genuine miss.
+@dataclass(frozen=True)
+class SkillMatch:
+    required: str
+    applicant: str | None
+    similarity: float  # best raw cosine (0-1); 1.0 for an exact token match
+    state: str  # "matched" | "related" | "missing"
+
+
+def classify_skill_matches(
+    applicant_skills: Sequence[str],
+    required_skills: Sequence[str],
+    sources: Mapping[str, tuple[str | None, float]] | None = None,
+) -> list[SkillMatch]:
+    """Per-required-skill coverage detail for the applicant-vs-job compare modal.
+
+    Mirrors :func:`skills_match`'s matching rules but keeps *which* applicant
+    skill covers each requirement (and how strongly), so the UI can show
+    "Excel · via Google Sheets" and split matched/related/missing. ``sources``
+    maps each required skill (stripped) to ``(best_applicant_skill, best_cosine)``
+    — the argmax the caller already computes for the semantic skills score.
+    Exact token matches are credited without needing ``sources``.
+    """
+    required = [skill.strip() for skill in required_skills if skill.strip()]
+    have = {skill.strip().lower() for skill in applicant_skills if skill.strip()}
+    matches: list[SkillMatch] = []
+    for skill in required:
+        if skill.lower() in have:
+            matches.append(SkillMatch(skill, None, 1.0, "matched"))
+            continue
+        applicant, cosine = sources.get(skill, (None, 0.0)) if sources else (None, 0.0)
+        if cosine >= _SKILL_MATCH_THRESHOLD:
+            matches.append(SkillMatch(skill, applicant, cosine, "matched"))
+        elif cosine >= _SKILL_RELATED_THRESHOLD:
+            matches.append(SkillMatch(skill, applicant, cosine, "related"))
+        else:
+            # Too weak to credit or name a source — a genuine gap.
+            matches.append(SkillMatch(skill, None, cosine, "missing"))
+    return matches
 
 
 # --- Experience ------------------------------------------------------------
@@ -221,6 +270,14 @@ def experience_match(
 
 # --- Education -------------------------------------------------------------
 
+# The education sub-score at/above which the requirement reads as "Met". Kept in
+# sync with the frontend's `statusFromScore` cutoff (score >= 80 -> met) so the
+# backend only credits a matched degree in the explainability chips when the UI
+# would actually show "Met". Under the min-gate this also fixes the effective
+# field-of-study bar: education is "Met" only when the calibrated course
+# similarity itself clears 0.8, i.e. a genuinely related field.
+_EDUCATION_MET_THRESHOLD = 0.8
+
 # Education levels ordered low -> high. Each entry maps keyword fragments to an
 # ordinal rank; more specific/higher levels are listed first so the first match
 # wins (e.g. "senior high" before "high school", "college graduate" before a
@@ -265,7 +322,8 @@ def education_match(
 ) -> tuple[float, str | None]:
     """Whether the applicant's education meets the job's requirement.
 
-    Averages whichever of two independent components the job specifies:
+    The job may specify two independent constraints, and the applicant must
+    satisfy **both** — so they combine as a gate (the minimum), not an average:
 
     * **Level** — an ordinal comparison of the applicant's highest education
       level against the job's minimum attainment ladder: 1.0 when the applicant
@@ -276,9 +334,17 @@ def education_match(
       cosine via ``course_similarity`` (the embedding is computed by the
       caller, mirroring the qualitative experience match).
 
+    Taking the minimum means a met level can no longer mask an unrelated field
+    (e.g. a Business Administration graduate against a Biology/Chemistry
+    requirement): the low course score becomes the education score, so the
+    requirement reads as unmet rather than "Met". A field is only credited when
+    its calibrated similarity clears the gate the caller uses for "Met".
+
     When the job states neither a recognizable level nor a course the
     requirement is treated as no constraint (1.0). Returns ``(score, reason)``
-    with ``reason`` set to the applicant's level only when the level is met.
+    with ``reason`` set to the applicant's level only when the education gate as
+    a whole passes — otherwise the reason would surface a matched degree in the
+    explainability chips for an applicant whose field does not fit.
     """
     # Ordinal minimum-education-level component.
     required_ranks = [
@@ -309,7 +375,11 @@ def education_match(
     components = [score for score in (level_score, course_score) if score is not None]
     if not components:
         return 1.0, None
-    return sum(components) / len(components), level_reason
+    # Gate, not average: the weakest satisfied constraint bounds the score, so an
+    # unrelated field can't be lifted into "Met" by a met level (and vice versa).
+    score = min(components)
+    reason = level_reason if score >= _EDUCATION_MET_THRESHOLD else None
+    return score, reason
 
 
 # --- Location --------------------------------------------------------------
@@ -341,6 +411,18 @@ def _location_parts(value: str) -> list[str]:
     return parts
 
 
+def _phrase_in(parts: list[str], phrase: str) -> bool:
+    """Whether ``phrase`` occurs as a contiguous whole-word run across ``parts``.
+
+    Tolerates one side being free text without comma separators — e.g. the
+    job part "cagayan de oro" is found inside a preference typed as
+    "kauswagan cagayan de oro". Word-boundary framing keeps it safe (" oro "
+    is not matched inside "toronto").
+    """
+    haystack = f" {' '.join(parts)} "
+    return f" {phrase} " in haystack
+
+
 def _location_score(pref_parts: list[str], job_parts: list[str]) -> float:
     """Graded overlap between two normalized, ordered locations.
 
@@ -351,10 +433,16 @@ def _location_score(pref_parts: list[str], job_parts: list[str]) -> float:
     * ``0.6`` — same province only (both name a province and they're equal, but
       nothing more specific lines up).
     * ``0.0`` — no shared component.
+
+    A component counts as shared when it appears (as a whole-word run) on the
+    other side, not only on an exact part-for-part equality, so a location typed
+    as free text ("Kauswagan Cagayan de Oro") still matches a comma-qualified one
+    ("Kauswagan, Cagayan de Oro City, Misamis Oriental").
     """
     if not pref_parts or not job_parts:
         return 0.0
-    shared = set(pref_parts) & set(job_parts)
+    shared = {part for part in job_parts if _phrase_in(pref_parts, part)}
+    shared |= {part for part in pref_parts if _phrase_in(job_parts, part)}
     if not shared:
         return 0.0
     # Province = trailing component, but only when a location has ≥2 parts; a

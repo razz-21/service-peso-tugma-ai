@@ -32,9 +32,11 @@ from .dashboard_schemas import (
 # How far an applicant has progressed, ranked so the most advanced referral wins
 # when they have several. Applicants with no referral fall through to "new".
 _STATUS_PRIORITY = {
-    RecommendedJobStatus.HIRED: 5,
-    RecommendedJobStatus.INTERVIEW_SCHEDULED: 4,
-    RecommendedJobStatus.REFERRED: 3,
+    RecommendedJobStatus.HIRED: 6,
+    RecommendedJobStatus.INTERVIEW_SCHEDULED: 5,
+    RecommendedJobStatus.REFERRED: 4,
+    # Resigned follows a hire, so it ranks above the never-placed terminals.
+    RecommendedJobStatus.RESIGNED: 3,
     RecommendedJobStatus.WITHDRAWN: 2,
     RecommendedJobStatus.NOT_HIRED: 1,
 }
@@ -45,6 +47,7 @@ _STATUS_BADGES = {
     RecommendedJobStatus.REFERRED: ("referred", "Referred"),
     RecommendedJobStatus.WITHDRAWN: ("withdrawn", "Withdrawn"),
     RecommendedJobStatus.NOT_HIRED: ("not_hired", "Not hired"),
+    RecommendedJobStatus.RESIGNED: ("resigned", "Resigned"),
 }
 _NEW_BADGE = ("new", "New")
 

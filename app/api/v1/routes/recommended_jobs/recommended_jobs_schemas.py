@@ -4,7 +4,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..jobs.jobs_models import JobStatus
-from .recommended_jobs_models import RecommendationScores, RecommendedJobStatus
+from .recommended_jobs_models import RecommendationScores, RecommendedJobStatus, SkillMatch
 
 
 class RecommendedJobCompany(BaseModel):
@@ -80,6 +80,7 @@ class RecommendedJobBase(BaseModel):
     embedded_applicant: list[float] = Field(default_factory=list)
     embedded_job: list[float] = Field(default_factory=list)
     key_matched: list[str] = Field(default_factory=list)
+    skill_matches: list[SkillMatch] = Field(default_factory=list)
     assessed_by: UUID
     workspace_id: UUID
     date_registered: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())

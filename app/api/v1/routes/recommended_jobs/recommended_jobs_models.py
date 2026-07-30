@@ -13,6 +13,10 @@ class RecommendedJobStatus(StrEnum):
     # NOTE: normalized spelling of the requested "widthdrawn".
     WITHDRAWN = "withdrawn"
     NOT_HIRED = "not_hired"
+    # Reached only from HIRED — the applicant left the position afterwards. Like
+    # WITHDRAWN / NOT_HIRED it is terminal and, being absent from
+    # `_VACANCY_HOLDING_STATUSES`, releases the seat the hire had consumed.
+    RESIGNED = "resigned"
 
 
 class RecommendationScores(BaseModel):
@@ -25,6 +29,24 @@ class RecommendationScores(BaseModel):
     experience: int = Field(default=0, ge=0, le=100)
     educational_background: int = Field(default=0, ge=0, le=100)
     location_preference: int = Field(default=0, ge=0, le=100)
+
+
+class SkillMatch(BaseModel):
+    """How one required skill is covered by the applicant, for the compare modal.
+
+    ``state`` is ``"matched"`` (exact token or a strong semantic match),
+    ``"related"`` (a nearby skill worth surfacing — e.g. "Google Sheets" for a
+    required "Excel"), or ``"missing"``. ``applicant`` names the covering skill
+    (``None`` for an exact match or a genuine miss); ``similarity`` is the best
+    cosine as a 0-100 percentage (100 for an exact token match).
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    required: str
+    applicant: str | None = None
+    similarity: int = Field(default=0, ge=0, le=100)
+    state: str = "missing"
 
 
 class RecommendedJob(Document):
@@ -62,6 +84,10 @@ class RecommendedJob(Document):
     embedded_applicant: list[float] = Field(default_factory=list)
     embedded_job: list[float] = Field(default_factory=list)
     key_matched: list[str] = Field(default_factory=list)
+    # Per-required-skill coverage detail (matched / related / missing) for the
+    # compare modal. Empty on records written before this field existed — the
+    # frontend then falls back to `key_matched` for skill classification.
+    skill_matches: list[SkillMatch] = Field(default_factory=list)
     # Foreign key to `users` (User.id) — the officer/user who assessed this
     # recommendation.
     assessed_by: UUID

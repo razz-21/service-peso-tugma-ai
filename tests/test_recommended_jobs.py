@@ -76,6 +76,7 @@ def _job(
         skills_required=skills_required or ["Python"],
         experience_required=None,
         minimum_education_attainment=[],
+        course_program=None,
         location=None,
         embedding=[1.0, 0.0, 0.0],  # preset so `_ensure_job_embeddings` is a no-op
     )
@@ -306,6 +307,8 @@ def _patch_job_lookup(monkeypatch: pytest.MonkeyPatch, job: _FakeJobDoc | None) 
         (RecommendedJobStatus.REFERRED, RecommendedJobStatus.INTERVIEW_SCHEDULED, 5),
         (RecommendedJobStatus.INTERVIEW_SCHEDULED, RecommendedJobStatus.HIRED, 5),
         (RecommendedJobStatus.REFERRED, RecommendedJobStatus.HIRED, 5),
+        # Resigning after a hire releases the seat the hire had consumed.
+        (RecommendedJobStatus.HIRED, RecommendedJobStatus.RESIGNED, 6),
         # Re-referring after a negative outcome consumes a vacancy again.
         (RecommendedJobStatus.WITHDRAWN, RecommendedJobStatus.REFERRED, 4),
         (RecommendedJobStatus.NOT_HIRED, RecommendedJobStatus.INTERVIEW_SCHEDULED, 4),
@@ -397,3 +400,51 @@ def test_starts_holding_vacancy(
     expected: bool,
 ) -> None:
     assert svc.starts_holding_vacancy(previous, new) is expected
+
+
+# --- status_transition_error (referral lifecycle guard) -----------------------
+#
+# The PATCH route rejects illegal transitions: terminal statuses (withdrawn /
+# not_hired / resigned) are final, and `resigned` is reachable only from `hired`.
+# The predicate returns None when a transition is allowed, else a reason string.
+
+
+@pytest.mark.parametrize(
+    ("previous", "new"),
+    [
+        # Normal forward lifecycle.
+        (None, RecommendedJobStatus.REFERRED),
+        (RecommendedJobStatus.REFERRED, RecommendedJobStatus.INTERVIEW_SCHEDULED),
+        (RecommendedJobStatus.INTERVIEW_SCHEDULED, RecommendedJobStatus.HIRED),
+        (RecommendedJobStatus.HIRED, RecommendedJobStatus.WITHDRAWN),
+        (RecommendedJobStatus.HIRED, RecommendedJobStatus.NOT_HIRED),
+        # Resigned is allowed only from hired.
+        (RecommendedJobStatus.HIRED, RecommendedJobStatus.RESIGNED),
+        # Re-applying the current (even terminal) status is a no-op, not a change.
+        (RecommendedJobStatus.WITHDRAWN, RecommendedJobStatus.WITHDRAWN),
+        (RecommendedJobStatus.RESIGNED, RecommendedJobStatus.RESIGNED),
+    ],
+)
+def test_status_transition_allowed(
+    previous: RecommendedJobStatus | None, new: RecommendedJobStatus
+) -> None:
+    assert svc.status_transition_error(previous, new) is None
+
+
+@pytest.mark.parametrize(
+    ("previous", "new"),
+    [
+        # Out of a terminal status -> rejected (final; can't be updated again).
+        (RecommendedJobStatus.WITHDRAWN, RecommendedJobStatus.REFERRED),
+        (RecommendedJobStatus.NOT_HIRED, RecommendedJobStatus.INTERVIEW_SCHEDULED),
+        (RecommendedJobStatus.RESIGNED, RecommendedJobStatus.HIRED),
+        # Resigned from anything other than hired -> rejected.
+        (None, RecommendedJobStatus.RESIGNED),
+        (RecommendedJobStatus.REFERRED, RecommendedJobStatus.RESIGNED),
+        (RecommendedJobStatus.INTERVIEW_SCHEDULED, RecommendedJobStatus.RESIGNED),
+    ],
+)
+def test_status_transition_rejected(
+    previous: RecommendedJobStatus | None, new: RecommendedJobStatus
+) -> None:
+    assert svc.status_transition_error(previous, new) is not None

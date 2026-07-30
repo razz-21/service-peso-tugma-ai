@@ -19,6 +19,7 @@ from app.matching.profile import (
 from app.matching.scoring import (
     MatchWeights,
     ScoreBreakdown,
+    classify_skill_matches,
     combined_score,
     cosine_similarity,
     education_match,
@@ -35,6 +36,7 @@ from .recommended_jobs_models import (
     RecommendationScores,
     RecommendedJob,
     RecommendedJobStatus,
+    SkillMatch,
 )
 from .recommended_jobs_schemas import RecommendedJobCreate, RecommendedJobPatch
 
@@ -117,8 +119,9 @@ async def list_recommended_jobs(
 
 # Referral-lifecycle statuses in which the applicant still occupies one of the
 # job's vacancies. Moving *into* one of these consumes a vacancy; moving *out*
-# of them (to withdrawn / not_hired, or back to unassessed) releases it. `hired`
-# keeps the seat consumed — the position stays filled.
+# of them (to withdrawn / not_hired / resigned, or back to unassessed) releases
+# it. `hired` keeps the seat consumed — the position stays filled until the
+# applicant later resigns, which frees it again.
 _VACANCY_HOLDING_STATUSES = frozenset(
     {
         RecommendedJobStatus.REFERRED,
@@ -126,6 +129,42 @@ _VACANCY_HOLDING_STATUSES = frozenset(
         RecommendedJobStatus.HIRED,
     }
 )
+
+
+# Terminal lifecycle statuses: once a referral reaches one of these the outcome
+# is final and the status can no longer change. `resigned` is additionally
+# reachable only from `hired` (see `status_transition_error`).
+_TERMINAL_STATUSES = frozenset(
+    {
+        RecommendedJobStatus.WITHDRAWN,
+        RecommendedJobStatus.NOT_HIRED,
+        RecommendedJobStatus.RESIGNED,
+    }
+)
+
+
+def status_transition_error(
+    previous: RecommendedJobStatus | None,
+    new: RecommendedJobStatus,
+) -> str | None:
+    """A human-readable reason the status transition is disallowed, else None.
+
+    Enforces the referral lifecycle server-side (the UI gates the same rules):
+
+    * A terminal status (withdrawn / not_hired / resigned) is final — no further
+      change is permitted.
+    * `resigned` is reachable only from `hired` — an applicant can't resign a
+      position they were never placed in.
+
+    Re-applying the current status is a no-op and always allowed.
+    """
+    if previous == new:
+        return None
+    if previous in _TERMINAL_STATUSES:
+        return f"This referral is {previous.value.replace('_', ' ')} and can no longer be updated"
+    if new == RecommendedJobStatus.RESIGNED and previous != RecommendedJobStatus.HIRED:
+        return "An applicant can only be marked resigned after being hired"
+    return None
 
 
 def _holds_vacancy(status: RecommendedJobStatus | None) -> bool:
@@ -339,13 +378,17 @@ async def generate_recommendations(
             skill_vectors = embed_batch(unique_required)
             required_skill_vecs = dict(zip(unique_required, skill_vectors, strict=True))
 
-    scored: list[tuple[Job, RecommendationScores, int, list[str]]] = []
+    scored: list[tuple[Job, RecommendationScores, int, list[str], list[SkillMatch]]] = []
     for job in jobs:
         semantic = cosine_similarity(applicant_vec, job.embedding)
         # Best cosine of each required skill against the applicant's skills, for
         # the semantic (MiniLM) skills match. None when the applicant lists no
         # skills — skills_match then falls back to exact-token matching.
         skill_similarities: dict[str, float] | None = None
+        # Best-matching applicant skill (argmax) per required skill, so the
+        # compare modal can show which skill covers each requirement and how
+        # closely (e.g. "Excel · via Google Sheets").
+        skill_sources: dict[str, tuple[str | None, float]] = {}
         if applicant_skill_vecs and required_skill_vecs:
             skill_similarities = {}
             for skill in job.skills_required:
@@ -353,13 +396,29 @@ async def generate_recommendations(
                 required_vec = required_skill_vecs.get(key)
                 if required_vec is None:
                     continue
-                skill_similarities[key] = max(
-                    (cosine_similarity(required_vec, av) for av in applicant_skill_vecs),
-                    default=0.0,
-                )
+                best_name: str | None = None
+                best_cosine = 0.0
+                for name, av in zip(applicant_skill_names, applicant_skill_vecs, strict=True):
+                    cosine = cosine_similarity(required_vec, av)
+                    if cosine > best_cosine:
+                        best_cosine = cosine
+                        best_name = name
+                skill_similarities[key] = best_cosine
+                skill_sources[key] = (best_name, best_cosine)
         skills, matched_skills = skills_match(
             applicant.technical_skills, job.skills_required, skill_similarities
         )
+        skill_matches = [
+            SkillMatch(
+                required=match.required,
+                applicant=match.applicant,
+                similarity=round(match.similarity * 100),
+                state=match.state,
+            )
+            for match in classify_skill_matches(
+                applicant.technical_skills, job.skills_required, skill_sources or None
+            )
+        ]
         qualitative_similarity: float | None = None
         if job_qual_terms[job.id] is not None:
             qual_vec = job_qual_vec.get(job.id)
@@ -404,7 +463,7 @@ async def generate_recommendations(
             educational_background=_to_pct(education),
             location_preference=_to_pct(location),
         )
-        scored.append((job, stored_scores, _to_pct(final), key_matched))
+        scored.append((job, stored_scores, _to_pct(final), key_matched, skill_matches))
 
     scored.sort(key=lambda item: item[2], reverse=True)
     top = scored[:top_k]
@@ -415,7 +474,7 @@ async def generate_recommendations(
         await RecommendedJob.find(In(RecommendedJob.id, stale_ids)).delete()
 
     results: list[RecommendedJob] = []
-    for job, stored_scores, final_pct, key_matched in top:
+    for job, stored_scores, final_pct, key_matched, skill_matches in top:
         rec = RecommendedJob(
             job_id=job.id,
             applicant_id=applicant.id,
@@ -427,6 +486,7 @@ async def generate_recommendations(
             embedded_applicant=applicant_vec,
             embedded_job=job.embedding,
             key_matched=key_matched,
+            skill_matches=skill_matches,
             assessed_by=assessed_by,
             workspace_id=workspace_id,
         )

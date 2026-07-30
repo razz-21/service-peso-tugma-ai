@@ -32,6 +32,7 @@ from app.matching.scoring import (
     DEFAULT_WEIGHTS,
     MatchWeights,
     ScoreBreakdown,
+    classify_skill_matches,
     combined_score,
     cosine_similarity,
     education_match,
@@ -157,6 +158,39 @@ def test_skills_semantic_mix_exact_and_related() -> None:
     assert math.isclose(score, (1.0 + (0.7 - 0.35) / (0.75 - 0.35)) / 2)
 
 
+# --- Skill match detail (compare modal) ------------------------------------
+
+
+def test_classify_skill_matches_exact_token() -> None:
+    [match] = classify_skill_matches(["Excel"], ["Excel"])
+    assert match.state == "matched"
+    assert match.applicant is None  # exact: same text, no "via"
+    assert match.similarity == 1.0
+
+
+def test_classify_skill_matches_related_surfaces_source() -> None:
+    # Google Sheets ~ Excel: below the full-match bar (0.62) but above related (0.50).
+    [match] = classify_skill_matches(
+        ["Google Sheets"], ["Excel"], {"Excel": ("Google Sheets", 0.55)}
+    )
+    assert match.state == "related"
+    assert match.applicant == "Google Sheets"
+    assert math.isclose(match.similarity, 0.55)
+
+
+def test_classify_skill_matches_strong_semantic_is_matched() -> None:
+    [match] = classify_skill_matches(["JS"], ["JavaScript"], {"JavaScript": ("JS", 0.7)})
+    assert match.state == "matched"
+    assert match.applicant == "JS"
+
+
+def test_classify_skill_matches_weak_is_missing_without_source() -> None:
+    # An unrelated best skill stays below the related bar and is not named.
+    [match] = classify_skill_matches(["Canva"], ["Excel"], {"Excel": ("Canva", 0.2)})
+    assert match.state == "missing"
+    assert match.applicant is None
+
+
 # --- Experience ------------------------------------------------------------
 
 
@@ -244,8 +278,9 @@ def test_education_unknown_applicant_with_requirement() -> None:
     assert education_match(None, ["Bachelor's Degree"]) == (0.0, None)
 
 
-def test_education_averages_level_and_course_when_both_specified() -> None:
-    # Level met (1.0) averaged with a strong course similarity (calibrated ~1.0).
+def test_education_gate_passes_when_level_and_field_both_strong() -> None:
+    # Level met (1.0) and a strong course similarity (calibrated 1.0): the gate
+    # (min) passes and the applicant's level is credited as a matched key.
     score, reason = education_match("Bachelor's Degree", ["High School"], course_similarity=0.55)
     assert math.isclose(score, 1.0)
     assert reason == "Bachelor's Degree"
@@ -258,10 +293,21 @@ def test_education_course_only_when_no_level_requirement() -> None:
     assert reason is None
 
 
-def test_education_course_mismatch_pulls_score_down() -> None:
-    # Level met but an unrelated course (low similarity) averages the score down.
-    score, _ = education_match("Bachelor's Degree", ["High School"], course_similarity=0.15)
-    assert math.isclose(score, 0.5)  # (1.0 + 0.0) / 2
+def test_education_unrelated_field_gates_out_a_met_level() -> None:
+    # Level met but an unrelated course (low similarity): the gate takes the
+    # field score, so a met level cannot mask the mismatch. No reason is
+    # credited since the requirement as a whole is not met.
+    score, reason = education_match("Bachelor's Degree", ["High School"], course_similarity=0.15)
+    assert math.isclose(score, 0.0)  # min(1.0, calibrated(0.15)=0.0)
+    assert reason is None
+
+
+def test_education_field_below_met_gate_yields_no_reason() -> None:
+    # A related-but-not-strong field keeps the score below the "Met" gate, so the
+    # degree is not surfaced as a matched key even though the level is met.
+    score, reason = education_match("Bachelor's Degree", ["High School"], course_similarity=0.39)
+    assert score < 0.8
+    assert reason is None
 
 
 # --- Location --------------------------------------------------------------
@@ -282,6 +328,23 @@ def test_location_matches_on_shared_city_component() -> None:
     )
     assert score == 1.0
     assert matched == "Cagayan de Oro City, Misamis Oriental"
+
+
+def test_location_matches_free_text_preference_without_commas() -> None:
+    # Reported case: the applicant typed the preference as free text (no commas),
+    # so it is one token — but the barangay/city still line up with the job's
+    # comma-qualified location via whole-word containment.
+    score, matched = location_match(
+        ["Kauswagan Cagayan de Oro"],
+        "Kauswagan, Cagayan de Oro City, Misamis Oriental",
+    )
+    assert score == 1.0
+    assert matched == "Kauswagan Cagayan de Oro"
+
+
+def test_location_free_text_word_boundary_not_a_substring_hit() -> None:
+    # Containment is whole-word: "oro" must not match inside "toronto".
+    assert location_match(["Toronto"], "Oro, Misamis Oriental") == (0.0, None)
 
 
 def test_location_shared_province_only_is_partial_credit() -> None:

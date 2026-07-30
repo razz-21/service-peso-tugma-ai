@@ -230,6 +230,18 @@ async def update_recommended_job(
         await _require_applicant(data.applicant_id, workspace_id)
     if data.assessed_by is not None:
         await _require_assessor(data.assessed_by)
+    # Enforce the referral lifecycle: terminal statuses are final and `resigned`
+    # is reachable only from `hired`. Rejected before any vacancy accounting so
+    # an illegal transition never touches the job's seat count.
+    if data.status is not None:
+        transition_error = recommended_jobs_service.status_transition_error(
+            recommended_job.status, data.status
+        )
+        if transition_error is not None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=transition_error,
+            )
     # Referring the applicant (moving the recommendation into a vacancy-holding
     # status) consumes one of the job's open seats — gate it on an open vacancy,
     # mirroring the applicant_jobs referral path. Only a transition that *starts*
