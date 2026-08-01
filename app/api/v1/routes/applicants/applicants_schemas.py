@@ -15,10 +15,57 @@ from .applicants_models import (
 
 NAME_MAX = 100
 
+#: Minimum working age enforced on every create/update, in years.
+#: Based on Philippine DOLE regulations (RA 9231).
+MIN_WORKING_AGE = 15
+#: Upper bound — sanity guard against obviously wrong data.
+MAX_REALISTIC_AGE = 120
+
 
 def _to_isoformat(value: object) -> object:
     if isinstance(value, datetime | date):
         return value.isoformat()
+    return value
+
+
+def _validate_date_of_birth(value: object) -> object:
+    """Shared DOB validator: rejects future dates, under-age, and unrealistic ages.
+
+    Runs *after* ``_to_isoformat`` (mode='after'), so ``value`` is always an ISO
+    string, a ``date``/``datetime``, or ``None`` at this point.
+    """
+    if value is None:
+        return value
+
+    # Parse from ISO string produced by _to_isoformat, or accept date/datetime directly.
+    if isinstance(value, str):
+        try:
+            dob = date.fromisoformat(value[:10])  # strip time component if present
+        except ValueError:
+            raise ValueError("Invalid date format. Use YYYY-MM-DD.")
+    elif isinstance(value, datetime):
+        dob = value.date()
+    elif isinstance(value, date):
+        dob = value
+    else:
+        raise ValueError("Invalid date value.")
+
+    today = datetime.now(UTC).date()
+
+    if dob > today:
+        raise ValueError("Date of birth cannot be in the future.")
+
+    # Compute age in whole years.
+    age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+
+    if age < MIN_WORKING_AGE:
+        raise ValueError(
+            f"Applicant must be at least {MIN_WORKING_AGE} years old."
+        )
+
+    if age > MAX_REALISTIC_AGE:
+        raise ValueError("Date of birth appears unrealistic.")
+
     return value
 
 
@@ -92,6 +139,11 @@ class ApplicantCreate(BaseModel):
     def _coerce_isoformat(cls, value: object) -> object:
         return _to_isoformat(value)
 
+    @field_validator("date_of_birth", mode="after")
+    @classmethod
+    def _validate_dob(cls, value: object) -> object:
+        return _validate_date_of_birth(value)
+
 
 class ApplicantPatch(BaseModel):
     firstname: str | None = Field(default=None, min_length=1, max_length=NAME_MAX)
@@ -123,6 +175,11 @@ class ApplicantPatch(BaseModel):
     @classmethod
     def _coerce_isoformat(cls, value: object) -> object:
         return _to_isoformat(value)
+
+    @field_validator("date_of_birth", mode="after")
+    @classmethod
+    def _validate_dob(cls, value: object) -> object:
+        return _validate_date_of_birth(value)
 
 
 class ApplicantFileRead(BaseModel):
