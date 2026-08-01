@@ -10,7 +10,7 @@ from app.core.blob import blob_options
 from app.matching.extraction import extract_text
 
 from .applicants_extraction import parse_resume
-from .applicants_models import Applicant, ApplicantFile
+from .applicants_models import Applicant, ApplicantFile, ApplicantStatus
 from .applicants_schemas import ApplicantCreate, ApplicantPatch, ResumeExtraction
 
 
@@ -31,7 +31,7 @@ async def create_applicant(
 
 
 async def list_applicants(
-    limit: int, offset: int, workspace_id: UUID, q: str | None = None
+    limit: int, offset: int, workspace_id: UUID, q: str | None = None, status: ApplicantStatus | None = None
 ) -> tuple[list[Applicant], int]:
     query = Applicant.find(Applicant.workspace_id == workspace_id)
     if q is not None:
@@ -43,6 +43,8 @@ async def list_applicants(
                 RegEx(Applicant.email_address, pattern, "i"),
             )
         )
+    if status is not None:
+        query = query.find(Applicant.status == status)
     total = await query.count()
     applicants = await query.sort("-created_at").skip(offset).limit(limit).to_list()
     return applicants, total

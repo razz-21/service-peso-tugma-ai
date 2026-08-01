@@ -10,7 +10,7 @@ from app.api.v1.routes.users.users_models import User
 from app.matching.extraction import ExtractionError, extract_text
 
 from . import applicants_service
-from .applicants_models import Applicant
+from .applicants_models import Applicant, ApplicantStatus
 from .applicants_schemas import (
     ApplicantCreate,
     ApplicantList,
@@ -97,9 +97,10 @@ async def list_applicants(
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
     q: Annotated[str | None, Query()] = None,
+    status: Annotated[ApplicantStatus | None, Query()] = None,
 ) -> ApplicantList:
     applicants, total = await applicants_service.list_applicants(
-        limit=limit, offset=offset, q=q, workspace_id=workspace_id
+        limit=limit, offset=offset, q=q, status=status, workspace_id=workspace_id
     )
     return ApplicantList(
         total=total,

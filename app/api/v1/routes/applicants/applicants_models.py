@@ -21,6 +21,11 @@ class Sex(StrEnum):
     FEMALE = "Female"
 
 
+class ApplicantStatus(StrEnum):
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+
+
 class Address(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -157,6 +162,7 @@ class Applicant(Document):
     # Owning workspace (Workspace.id). Set from the session on creation; scopes
     # the record to a single tenant.
     workspace_id: UUID
+    status: ApplicantStatus = ApplicantStatus.ACTIVE
     created_by: UUID | None = None
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
