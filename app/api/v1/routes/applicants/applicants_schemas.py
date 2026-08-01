@@ -15,10 +15,7 @@ from .applicants_models import (
 
 NAME_MAX = 100
 
-#: Minimum working age enforced on every create/update, in years.
-#: Based on Philippine DOLE regulations (RA 9231).
-MIN_WORKING_AGE = 15
-#: Upper bound — sanity guard against obviously wrong data.
+MIN_WORKING_AGE = 1
 MAX_REALISTIC_AGE = 120
 
 
