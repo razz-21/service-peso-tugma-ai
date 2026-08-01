@@ -342,13 +342,14 @@ class _ApplicantRefDoc(BaseModel):
 
 
 class _JobPositionDoc(BaseModel):
-    # Projection over `jobs` — just the title and owning company for each referral.
-    # `id` is aliased to Mongo's `_id`.
+    # Projection over `jobs` — the title, owning company and work location for
+    # each referral. `id` is aliased to Mongo's `_id`.
     model_config = ConfigDict(populate_by_name=True)
 
     id: UUID = Field(alias="_id")
     title: str
     company_id: UUID
+    location: str | None = None
 
 
 async def _referrals_monthly(workspace_id: UUID, year: int) -> list[MonthlyCount]:
@@ -487,7 +488,7 @@ async def _referral_rows(
                 date_referred=referral.created_at,
                 contact_number=applicant.primary_mobile_number if applicant else None,
                 company_referred=company_name_by_id.get(job.company_id) if job else None,
-                city_province_address=None,
+                job_location=job.location if job else None,
             )
         )
 

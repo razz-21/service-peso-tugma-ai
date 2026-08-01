@@ -79,8 +79,7 @@ class ApplicantReferredRow(BaseModel):
 
     Applicant attributes (address, skills, demographics, education) are snapshots
     resolved from the applicant record; `position`/`company_referred` come from
-    the referred job. `city_province_address` is intentionally always blank (a
-    placeholder column requested for the export layout).
+    the referred job. `job_location` is the referred job's work location.
     """
 
     name: str | None = None
@@ -96,7 +95,7 @@ class ApplicantReferredRow(BaseModel):
     date_referred: str  # ISO timestamp; the client renders the date
     contact_number: str | None = None
     company_referred: str | None = None
-    city_province_address: str | None = None
+    job_location: str | None = None
 
 
 class ApplicantReferredReport(BaseModel):
