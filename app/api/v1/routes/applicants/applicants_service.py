@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 import vercel_blob
 from beanie.operators import Or, RegEx
 
+from app.core.blob import blob_options
 from app.matching.extraction import extract_text
 
 from .applicants_extraction import parse_resume
@@ -91,7 +92,7 @@ async def add_applicant_file(
         vercel_blob.put,
         pathname,
         data,
-        {"addRandomSuffix": "false"},
+        blob_options(addRandomSuffix="false"),
     )
     applicant.files.append(
         ApplicantFile(

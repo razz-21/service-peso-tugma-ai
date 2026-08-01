@@ -36,6 +36,12 @@ class Settings(BaseSettings):
 
     CORS_ORIGINS: str = "http://localhost:3000"
 
+    # Vercel Blob read/write token. The `vercel_blob` library reads this from
+    # `os.environ`, but pydantic-settings parses `.env` into `settings` only
+    # (not the process environment), so it's passed explicitly to Blob calls via
+    # `app.core.blob.blob_options`. Leave blank to fall back to the env var.
+    BLOB_READ_WRITE_TOKEN: str = ""
+
     MONGODB_USERNAME: str = "username"
     MONGODB_PASSWORD: str = "password"
     MONGODB_SCHEME: str = "mongodb"
