@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from .applicants_models import (
     Address,
+    ApplicantStatus,
     EducationalBackground,
     Eligibility,
     PreferredOccupationIndustry,
@@ -42,6 +43,7 @@ class ApplicantBase(BaseModel):
     secondary_mobile_number: str | None = None
     email_address: EmailStr | None = None
     employment_status: str | None = None
+    status: ApplicantStatus = ApplicantStatus.ACTIVE
     preferred_occupation_industry: list[PreferredOccupationIndustry] = Field(default_factory=list)
     preferred_work_location: list[str] = Field(default_factory=list)
     salary_expectation: str | None = None
@@ -78,6 +80,7 @@ class ApplicantCreate(BaseModel):
     secondary_mobile_number: str | None = None
     email_address: EmailStr | None = None
     employment_status: str | None = None
+    status: ApplicantStatus = ApplicantStatus.ACTIVE
     preferred_occupation_industry: list[PreferredOccupationIndustry] = Field(default_factory=list)
     preferred_work_location: list[str] = Field(default_factory=list)
     salary_expectation: str | None = None
@@ -110,6 +113,7 @@ class ApplicantPatch(BaseModel):
     secondary_mobile_number: str | None = None
     email_address: EmailStr | None = None
     employment_status: str | None = None
+    status: ApplicantStatus | None = None
     preferred_occupation_industry: list[PreferredOccupationIndustry] | None = None
     preferred_work_location: list[str] | None = None
     salary_expectation: str | None = None
