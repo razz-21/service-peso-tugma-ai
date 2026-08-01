@@ -36,6 +36,8 @@ from .reports_schemas import (
     MonthlyCount,
     NewEstablishmentsCard,
     NewRegistrantsCard,
+    PesoAccomplishmentReport,
+    ReferralFunnelReport,
     TopOccupation,
     TopPlacedPosition,
     VacanciesSolicitedCard,
@@ -930,4 +932,116 @@ async def get_establishments_registered(
         with_active_jobs=with_active_jobs,
         by_type=_by_type(companies),
         rows=rows,
+    )
+
+
+# --- Accomplishment --------------------------------------------------------
+
+
+async def get_peso_accomplishment(
+    workspace_id: UUID, start_date: date, end_date: date
+) -> PesoAccomplishmentReport:
+    # The accomplishment roll-up: every headline indicator counted within the window,
+    # reusing the same definitions as the individual reports (registrations by
+    # `Applicant.created_at`, vacancies/establishments from the job breakdown,
+    # referrals with a set status, placements by HIRED hire time).
+    start_iso = _day_start_iso(start_date)
+    end_iso = _day_start_iso(end_date + timedelta(days=1))
+
+    registered = await Applicant.find(
+        Applicant.workspace_id == workspace_id,
+        Applicant.created_at >= start_iso,
+        Applicant.created_at < end_iso,
+    ).count()
+
+    vacancies, establishments = await _window_breakdown(workspace_id, start_iso, end_iso)
+
+    referred = await RecommendedJob.find(
+        RecommendedJob.workspace_id == workspace_id,
+        RecommendedJob.created_at >= start_iso,
+        RecommendedJob.created_at < end_iso,
+        _referred(),
+    ).count()
+
+    placed = await RecommendedJob.find(
+        RecommendedJob.workspace_id == workspace_id,
+        RecommendedJob.updated_at >= start_iso,
+        RecommendedJob.updated_at < end_iso,
+        _hired(),
+    ).count()
+
+    placement_rate = round(placed / referred * 100, 1) if referred else 0.0
+
+    return PesoAccomplishmentReport(
+        start_date=start_date,
+        end_date=end_date,
+        job_seekers_registered=registered,
+        establishments_engaged=establishments,
+        vacancies_solicited=vacancies,
+        applicants_referred=referred,
+        applicants_placed=placed,
+        placement_rate=placement_rate,
+    )
+
+
+# --- Referral-to-Placement Funnel ------------------------------------------
+
+
+async def get_referral_to_placement_funnel(
+    workspace_id: UUID, start_date: date, end_date: date
+) -> ReferralFunnelReport:
+    # Cohort = referrals created in the window. In one aggregation, count the
+    # cohort and how many reached each funnel stage: interviewed (status
+    # interview_scheduled or hired) and hired (status hired) — the same stage
+    # definitions the Applicant Referred / Placed reports use.
+    start_iso = _day_start_iso(start_date)
+    end_iso = _day_start_iso(end_date + timedelta(days=1))
+
+    interview_plus = [
+        RecommendedJobStatus.INTERVIEW_SCHEDULED.value,
+        RecommendedJobStatus.HIRED.value,
+    ]
+    hired_value = RecommendedJobStatus.HIRED.value
+
+    rows = (
+        await RecommendedJob.find(
+            RecommendedJob.workspace_id == workspace_id,
+            RecommendedJob.created_at >= start_iso,
+            RecommendedJob.created_at < end_iso,
+            _referred(),
+        )
+        .aggregate(
+            [
+                {
+                    "$group": {
+                        "_id": None,
+                        "referred": {"$sum": 1},
+                        "interviewed": {
+                            "$sum": {"$cond": [{"$in": ["$status", interview_plus]}, 1, 0]}
+                        },
+                        "hired": {"$sum": {"$cond": [{"$eq": ["$status", hired_value]}, 1, 0]}},
+                    }
+                }
+            ]
+        )
+        .to_list()
+    )
+
+    if rows:
+        referred = int(rows[0]["referred"])
+        interviewed = int(rows[0]["interviewed"])
+        hired = int(rows[0]["hired"])
+    else:
+        referred = interviewed = hired = 0
+
+    return ReferralFunnelReport(
+        start_date=start_date,
+        end_date=end_date,
+        referred=referred,
+        interviewed=interviewed,
+        hired=hired,
+        did_not_convert=referred - hired,
+        interviewed_pct=round(interviewed / referred * 100, 1) if referred else 0.0,
+        hired_pct=round(hired / referred * 100, 1) if referred else 0.0,
+        interviewed_to_hired_pct=round(hired / interviewed * 100, 1) if interviewed else 0.0,
     )

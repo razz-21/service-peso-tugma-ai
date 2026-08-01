@@ -13,6 +13,8 @@ from .reports_schemas import (
     ApplicantRegisteredReport,
     EstablishmentsRegisteredReport,
     JobSolicitedReport,
+    PesoAccomplishmentReport,
+    ReferralFunnelReport,
 )
 
 router = APIRouter()
@@ -87,5 +89,29 @@ async def get_establishments_registered(
 ) -> EstablishmentsRegisteredReport:
     start, end = _resolve_window(start_date, end_date)
     return await reports_service.get_establishments_registered(
+        workspace_id=workspace_id, start_date=start, end_date=end
+    )
+
+
+@router.get("/peso-accomplishment", response_model=PesoAccomplishmentReport)
+async def get_peso_accomplishment(
+    workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+    start_date: Annotated[date | None, Query()] = None,
+    end_date: Annotated[date | None, Query()] = None,
+) -> PesoAccomplishmentReport:
+    start, end = _resolve_window(start_date, end_date)
+    return await reports_service.get_peso_accomplishment(
+        workspace_id=workspace_id, start_date=start, end_date=end
+    )
+
+
+@router.get("/referral-to-placement-funnel", response_model=ReferralFunnelReport)
+async def get_referral_to_placement_funnel(
+    workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+    start_date: Annotated[date | None, Query()] = None,
+    end_date: Annotated[date | None, Query()] = None,
+) -> ReferralFunnelReport:
+    start, end = _resolve_window(start_date, end_date)
+    return await reports_service.get_referral_to_placement_funnel(
         workspace_id=workspace_id, start_date=start, end_date=end
     )
