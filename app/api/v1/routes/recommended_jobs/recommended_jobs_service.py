@@ -1,7 +1,8 @@
+import hashlib
 from datetime import UTC, datetime
 from uuid import UUID
 
-from beanie.operators import In
+from beanie.operators import NE, Eq, In
 
 from app.api.v1.routes.applicants.applicants_models import Applicant
 from app.api.v1.routes.workspaces.workspaces_models import Workspace
@@ -100,6 +101,7 @@ async def list_recommended_jobs(
     status: RecommendedJobStatus | None = None,
     is_relevant: bool | None = None,
     assessed_by: UUID | None = None,
+    referred: bool | None = None,
 ) -> tuple[list[RecommendedJob], int]:
     query = RecommendedJob.find(RecommendedJob.workspace_id == workspace_id)
     if job_id is not None:
@@ -108,6 +110,15 @@ async def list_recommended_jobs(
         query = query.find(RecommendedJob.applicant_id == applicant_id)
     if status is not None:
         query = query.find(RecommendedJob.status == status)
+    # Referral split: `referred=True` returns only rows an officer has acted on
+    # (a lifecycle status is set), `referred=False` only the untouched AI
+    # recommendations (status is null). Lets the client fetch the "Recommended"
+    # list and the "Referred" list as two disjoint server-side queries instead of
+    # slicing one combined response by status on the frontend.
+    if referred is True:
+        query = query.find(NE(RecommendedJob.status, None))
+    elif referred is False:
+        query = query.find(Eq(RecommendedJob.status, None))
     if is_relevant is not None:
         query = query.find(RecommendedJob.is_relevant == is_relevant)
     if assessed_by is not None:
@@ -246,15 +257,24 @@ def _weights_for(workspace: Workspace) -> MatchWeights:
     )
 
 
-async def _ensure_job_embeddings(jobs: list[Job]) -> None:
-    # Populate and persist the cached `Job.embedding` for any job missing one, in
-    # a single batched encode, so repeat runs reuse the stored vectors.
-    missing = [job for job in jobs if not job.embedding]
-    if not missing:
+async def _refresh_job_embeddings(jobs: list[Job]) -> None:
+    # Keep each job's cached `Job.embedding` in sync with its *current* text. A job
+    # is re-embedded when it has no vector yet, or when its text changed since the
+    # vector was computed (an officer edited the requirements) — detected by
+    # hashing the text and comparing to the stored `embedding_source`. Unchanged
+    # jobs are skipped, so we never re-encode or re-save a job needlessly; the
+    # stale ones are re-encoded together in a single batched call.
+    stale: list[tuple[Job, str]] = []  # (job, current signature)
+    for job in jobs:
+        signature = hashlib.sha256(job_to_text(job).encode("utf-8")).hexdigest()
+        if not job.embedding or job.embedding_source != signature:
+            stale.append((job, signature))
+    if not stale:
         return
-    vectors = embed_batch([job_to_text(job) for job in missing])
-    for job, vector in zip(missing, vectors, strict=True):
+    vectors = embed_batch([job_to_text(job) for job, _ in stale])
+    for (job, signature), vector in zip(stale, vectors, strict=True):
         job.embedding = vector
+        job.embedding_source = signature
         await job.save()
 
 
@@ -270,9 +290,11 @@ async def generate_recommendations(
     rule-based skills/experience/education/location) with the workspace's weights,
     ranks by the combined MatchScore, and stores the Top-K as RecommendedJob rows.
     Regenerating replaces only the applicant's *unreferred* recommendations: rows
-    the applicant has already been referred to (status set) are preserved, and
-    their jobs are excluded from the fresh Top-K so they are never duplicated.
-    Returns every current recommendation (preserved + fresh) in rank order.
+    the applicant has already been referred to (status set) are preserved in the
+    database (their referral history/state survives), and their jobs are excluded
+    from the fresh Top-K so they are never re-recommended. Returns only the fresh
+    *unreferred* Top-K in rank order — already-referred jobs are intentionally left
+    out, so the caller's Recommended list never contains a job under referral.
     """
     workspace_id = workspace.id
     weights = _weights_for(workspace)
@@ -330,13 +352,14 @@ async def generate_recommendations(
         if job.id not in preserved_job_ids and meets_primary_requirements(applicant, job)
     ]
     if not jobs:
-        # No fresh candidates: clear the stale (unreferred) rows and return the
-        # preserved referrals in rank order.
+        # No fresh candidates: clear the stale (unreferred) rows. The preserved
+        # referrals stay in the database but are not part of the Recommended list,
+        # so nothing fresh is returned.
         if stale_ids:
             await RecommendedJob.find(In(RecommendedJob.id, stale_ids)).delete()
-        return sorted(preserved, key=lambda rec: rec.score, reverse=True)
+        return []
 
-    await _ensure_job_embeddings(jobs)
+    await _refresh_job_embeddings(jobs)
 
     # Embed each job's qualitative experience requirement (field/role wording) in
     # one batch, so the per-job loop can cosine-compare it to the applicant's
@@ -493,6 +516,7 @@ async def generate_recommendations(
         await rec.insert()
         results.append(rec)
 
-    # Return every current recommendation — preserved referrals plus the fresh
-    # Top-K — in rank order, so the client reflects the full, deduplicated set.
-    return sorted([*preserved, *results], key=lambda rec: rec.score, reverse=True)
+    # Return only the fresh, unreferred Top-K in rank order. The preserved
+    # referrals remain persisted (and their jobs were excluded above) but are
+    # deliberately omitted here, so the Recommended list holds no referred job.
+    return sorted(results, key=lambda rec: rec.score, reverse=True)

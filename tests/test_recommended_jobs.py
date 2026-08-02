@@ -12,6 +12,7 @@ references (``Job.workspace_id`` …) and the ``RecommendedJob`` document are
 replaced with lightweight stand-ins.
 """
 
+import hashlib
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -78,8 +79,17 @@ def _job(
         minimum_education_attainment=[],
         course_program=None,
         location=None,
-        embedding=[1.0, 0.0, 0.0],  # preset so `_ensure_job_embeddings` is a no-op
+        embedding=[1.0, 0.0, 0.0],
+        # Signature of the stubbed job text (`job_to_text` -> "job text") so
+        # `_refresh_job_embeddings` sees the cache as current and skips re-encoding.
+        embedding_source=hashlib.sha256(b"job text").hexdigest(),
+        save=_async_noop,
     )
+
+
+async def _async_noop() -> None:
+    """No-op stand-in for `Document.save()` on the in-memory job stubs."""
+    return None
 
 
 def _applicant() -> SimpleNamespace:
@@ -226,7 +236,7 @@ async def test_generate_with_no_qualifying_jobs_clears_unreferred(
     assert stub_pipeline.deleted == [True]
 
 
-async def test_generate_preserves_referred_and_excludes_their_jobs(
+async def test_generate_excludes_referred_from_result_but_preserves_their_row(
     monkeypatch: pytest.MonkeyPatch, stub_pipeline: _Pipeline
 ) -> None:
     applicant = _applicant()
@@ -241,12 +251,13 @@ async def test_generate_preserves_referred_and_excludes_their_jobs(
         applicant, _workspace(), assessed_by=uuid4(), top_k=5
     )
 
-    # Referred one is preserved, the fresh one is generated, and the referred
-    # job is not duplicated in the Top-K.
-    assert {rec.job_id for rec in results} == {referred_job.id, fresh_job.id}
+    # Only the fresh, unreferred job is returned; the referred job is neither
+    # re-generated nor included in the Recommended list.
+    assert {rec.job_id for rec in results} == {fresh_job.id}
     assert {rec.job_id for rec in stub_pipeline.inserted} == {fresh_job.id}
-    # The preserved row is returned by identity, not re-created.
-    assert referred_rec in results
+    assert referred_rec not in results
+    # The referred row is preserved in the database — never deleted as stale.
+    assert stub_pipeline.deleted == []
 
 
 # --- update_recommended_job vacancy accounting --------------------------------

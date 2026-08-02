@@ -44,6 +44,11 @@ class Job(Document):
     # Kept off the read/write schemas (JobCreate/JobPatch/JobRead) so it stays an
     # internal cache rather than a client-facing field.
     embedding: list[float] = Field(default_factory=list)
+    # Fingerprint (hash) of the job text that produced `embedding`. The recommender
+    # compares it against the current text on every run and re-embeds when they
+    # differ, so a job whose requirements were edited gets a fresh vector instead
+    # of scoring against a stale cache. Empty until the embedding is first computed.
+    embedding_source: str = Field(default="")
     # Foreign key to `companies` (Company.id). Stored as a UUID reference rather
     # than a Mongo DBRef so it round-trips like any other scalar field.
     company_id: UUID

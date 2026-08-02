@@ -181,6 +181,7 @@ async def list_recommended_jobs(
     status: Annotated[RecommendedJobStatus | None, Query()] = None,
     is_relevant: Annotated[bool | None, Query()] = None,
     assessed_by: Annotated[UUID | None, Query()] = None,
+    referred: Annotated[bool | None, Query()] = None,
 ) -> RecommendedJobList:
     recommendations, total = await recommended_jobs_service.list_recommended_jobs(
         limit=limit,
@@ -190,6 +191,7 @@ async def list_recommended_jobs(
         status=status,
         is_relevant=is_relevant,
         assessed_by=assessed_by,
+        referred=referred,
         workspace_id=workspace_id,
     )
     jobs = await recommended_jobs_service.get_jobs_map(recommendations, workspace_id=workspace_id)
@@ -231,7 +233,7 @@ async def update_recommended_job(
     data: RecommendedJobPatch,
     workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
     current_user: Annotated[User, Depends(get_current_user)],
-    ) -> RecommendedJobRead:
+) -> RecommendedJobRead:
     recommended_job = await recommended_jobs_service.get_recommended_job(
         recommended_job_id, workspace_id=workspace_id
     )
