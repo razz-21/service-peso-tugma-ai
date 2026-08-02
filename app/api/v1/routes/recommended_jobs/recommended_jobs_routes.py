@@ -4,6 +4,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from app.api.deps import get_current_user, get_current_workspace_id
+from app.api.v1.routes.audit_logs import audit_logs_service
+from app.api.v1.routes.audit_logs.audit_logs_models import AuditEntity, AuditTone
 from app.api.v1.routes.users.users_models import User
 from app.matching.primary_requirements import has_open_vacancy
 
@@ -127,6 +129,18 @@ async def create_recommended_job(
     )
     company = await companies_service.get_company(job.company_id, workspace_id=workspace_id)
     user = await users_service.get_user(recommended_job.assessed_by)
+    if recommended_jobs_service.starts_holding_vacancy(None, recommended_job.status):
+        await audit_logs_service.record_audit(
+            workspace_id=workspace_id,
+            entity=AuditEntity.REFERRALS,
+            entity_label="Referral",
+            actor=current_user.fullname,
+            action="referred an applicant to",
+            icon="send",
+            icon_tone=AuditTone.GREEN,
+            chip_tone=AuditTone.GREEN,
+            records=[job.title] + ([company.company_name] if company else []),
+        )
     return _to_read(recommended_job, job, company, user)
 
 
@@ -216,10 +230,13 @@ async def update_recommended_job(
     recommended_job_id: UUID,
     data: RecommendedJobPatch,
     workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
-) -> RecommendedJobRead:
+    current_user: Annotated[User, Depends(get_current_user)],
+    ) -> RecommendedJobRead:
     recommended_job = await recommended_jobs_service.get_recommended_job(
         recommended_job_id, workspace_id=workspace_id
     )
+
+    previous_status = recommended_job.status
     if recommended_job is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Recommended job not found"
@@ -272,6 +289,19 @@ async def update_recommended_job(
         else None
     )
     user = await users_service.get_user(recommended_job.assessed_by)
+
+    if data.status is not None and recommended_job.status != previous_status:
+        await audit_logs_service.record_audit(
+            workspace_id=workspace_id,
+            entity=AuditEntity.REFERRALS,
+            entity_label="Referral",
+            actor=current_user.fullname,
+            action=f"set a referral to {recommended_job.status.value.replace('_', ' ')}",
+            icon="send",
+            icon_tone=AuditTone.GREEN,
+            chip_tone=AuditTone.GREEN,
+            records=([job.title] if job else []) + ([company.company_name] if company else []),
+        )
     return _to_read(recommended_job, job, company, user)
 
 
