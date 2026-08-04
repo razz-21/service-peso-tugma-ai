@@ -23,6 +23,7 @@ class JobCompany(BaseModel):
     id: UUID
     company_name: str
     company_type: CompanyType
+    avatar: str | None = None
 
 
 class JobBase(BaseModel):
