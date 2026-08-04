@@ -182,6 +182,7 @@ async def delete_applicant(
 async def upload_applicant_file(
     applicant_id: UUID,
     workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+    current_user: Annotated[User, Depends(get_current_user)],
     file: Annotated[UploadFile, File()],
 ) -> ApplicantRead:
     # Stores the uploaded resume and persists its raw text on the applicant so
@@ -202,5 +203,6 @@ async def upload_applicant_file(
         content_type=file.content_type or "application/pdf",
         data=data,
         resume_text=raw_text,
+        uploaded_by=current_user.id,
     )
     return ApplicantRead.model_validate(applicant)

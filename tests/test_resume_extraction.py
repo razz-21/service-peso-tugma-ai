@@ -104,6 +104,82 @@ def test_parse_resume_parses_various_work_dates() -> None:
     assert (work[2].start_date, work[2].end_date) == ("2015-01-01", None)
 
 
+def test_parse_resume_ignores_wrapped_description_lines() -> None:
+    # A job header (with dates) followed by several wrapped description lines must
+    # yield ONE entry, not one per line. Previously every non-date line under
+    # WORK EXPERIENCE became its own bogus "position".
+    text = (
+        "WORK EXPERIENCE\n"
+        "IT Faculty, Liceo de Cagayan University  Jul 2025 - Present\n"
+        "Delivered instruction in core IT subjects, including Object-Oriented\n"
+        "Programming, Platform Technologies, and Living in the IT Era, focusing on\n"
+        "practical and industry-relevant skills. Also served as a training coordinator.\n"
+        "Front-end Engineer, ORQ.ai  Apr 2024 - May 2025\n"
+        "Worked on developing and implementing front-end features and application\n"
+        "workflows, ensuring alignment with product requirements and user goals.\n"
+    )
+    work = parse_resume(text, _meta(text)).work_experience
+    assert len(work) == 2
+    assert work[0].position == "IT Faculty, Liceo de Cagayan University"
+    assert (work[0].start_date, work[0].end_date) == ("2025-07-01", None)
+    assert work[1].position == "Front-end Engineer, ORQ.ai"
+    assert (work[1].start_date, work[1].end_date) == ("2024-04-01", "2025-05-01")
+
+
+def test_parse_resume_titles_a_date_only_header_from_prior_line() -> None:
+    # Resume that puts the role above a date-only line: the entry borrows the
+    # preceding line as its position rather than leaving it empty.
+    text = "WORK EXPERIENCE\nSoftware Engineer, Acme\nJan 2020 - Dec 2022\n"
+    work = parse_resume(text, _meta(text)).work_experience
+    assert len(work) == 1
+    assert work[0].position == "Software Engineer, Acme"
+    assert (work[0].start_date, work[0].end_date) == ("2020-01-01", "2022-12-01")
+
+
+def test_parse_resume_stops_skills_at_projects_section() -> None:
+    # A PROJECTS section after SKILLS must not bleed project names, prose, and
+    # links into technical_skills (the reported bug).
+    text = (
+        "SKILLS\n"
+        "HTML5\n"
+        "TypeScript\n"
+        "Material UI\n"
+        "Unit Testing\n"
+        "Hono-API\n"
+        "Playwright\n"
+        "PROJECTS\n"
+        "HSI ATTENDANCE - ANDROID\n"
+        "log for their work. Allows employees to clock-in/clock-out\n"
+        "Tech Stack: Android, Kotlin, AndroidStudio\n"
+        "Link: https://play.google.com/store/apps/details?id=com.r.hsiattendance\n"
+        "POLLIFY - WEB\n"
+        "A web-based application designed to facilitate the creation of polls.\n"
+    )
+    skills = parse_resume(text, _meta(text)).technical_skills
+    assert skills == [
+        "HTML5",
+        "TypeScript",
+        "Material UI",
+        "Unit Testing",
+        "Hono-API",
+        "Playwright",
+    ]
+
+
+def test_parse_skills_drops_links_and_prose_in_a_shared_block() -> None:
+    # Even without a section break, links / labels / sentences are filtered while
+    # legitimate skills (incl. dotted names) survive.
+    text = (
+        "SKILLS\n"
+        "Node.js, .NET, Socket.io\n"
+        "scan QR for attendance. Then update information\n"
+        "Link: https://example.com/x, id=com.foo.bar, Tech Stack: Android\n"
+        "etc..\n"
+    )
+    skills = parse_resume(text, _meta(text)).technical_skills
+    assert skills == ["Node.js", ".NET", "Socket.io"]
+
+
 def test_extract_text_reads_two_columns_in_order() -> None:
     # Build a two-column page where each line is its own block; a naive
     # top-to-bottom-by-line read would interleave the columns.

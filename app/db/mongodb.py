@@ -8,6 +8,7 @@ from app.api.v1.routes.applicant_jobs.applicant_jobs_models import ApplicantJob
 from app.api.v1.routes.applicants.applicants_models import Applicant
 from app.api.v1.routes.audit_logs.audit_logs_models import AuditLog
 from app.api.v1.routes.companies.companies_models import Company
+from app.api.v1.routes.files.files_models import FileObject
 from app.api.v1.routes.jobs.jobs_models import Job
 from app.api.v1.routes.recommended_jobs.recommended_jobs_models import RecommendedJob
 from app.api.v1.routes.users.users_models import User
@@ -46,6 +47,7 @@ async def init_mongo() -> None:
                 RecommendedJob,
                 ApplicantJob,
                 AuditLog,
+                FileObject,
             ],
         )
         _client = client

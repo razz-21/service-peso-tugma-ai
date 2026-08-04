@@ -8,6 +8,7 @@ from app.api.v1.routes import (
     auth,
     companies,
     dashboard,
+    files,
     health,
     jobs,
     me,
@@ -60,3 +61,4 @@ api_router.include_router(
 api_router.include_router(
     audit_logs.router, prefix="/audit-logs", tags=["audit_logs"], dependencies=auth_required
 )
+api_router.include_router(files.router, prefix="/files", tags=["files"], dependencies=auth_required)

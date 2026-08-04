@@ -1,16 +1,14 @@
-import asyncio
 import re
 from datetime import UTC, datetime
-from uuid import UUID, uuid4
+from uuid import UUID
 
-import vercel_blob
 from beanie.operators import Or, RegEx
 
-from app.core.blob import blob_options
+from app.api.v1.routes.files import files_service
 from app.matching.extraction import extract_text
 
 from .applicants_extraction import parse_resume
-from .applicants_models import Applicant, ApplicantFile, ApplicantStatus
+from .applicants_models import Applicant, ApplicantStatus
 from .applicants_schemas import ApplicantCreate, ApplicantPatch, ResumeExtraction
 
 
@@ -31,7 +29,11 @@ async def create_applicant(
 
 
 async def list_applicants(
-    limit: int, offset: int, workspace_id: UUID, q: str | None = None, status: ApplicantStatus | None = None
+    limit: int,
+    offset: int,
+    workspace_id: UUID,
+    q: str | None = None,
+    status: ApplicantStatus | None = None,
 ) -> tuple[list[Applicant], int]:
     query = Applicant.find(Applicant.workspace_id == workspace_id)
     if q is not None:
@@ -78,32 +80,22 @@ async def add_applicant_file(
     content_type: str,
     data: bytes,
     resume_text: str | None,
+    uploaded_by: UUID | None = None,
 ) -> Applicant:
-    """Persist an uploaded file for the applicant and record the raw resume text.
+    """Persist an uploaded resume for the applicant and record its raw text.
 
-    Uploads the bytes to Vercel Blob at `applicants/<applicant_id>/<file_id>.pdf`
-    (the serverless filesystem is ephemeral/read-only), appends an embedded
-    `ApplicantFile` whose `storage_ref` is the returned Blob URL, and sets
-    `resume_text` (fed into the matcher's semantic vector) when text was extracted.
+    The bytes are stored in the generic `files` collection linked to the
+    applicant via `foreign_id` (so attachments live in one place across the app,
+    not embedded per-record), and `resume_text` — fed into the matcher's semantic
+    vector — is set on the applicant when text was extracted.
     """
-    file_id = uuid4()
-    pathname = f"applicants/{applicant.id}/{file_id}.pdf"
-    # vercel_blob.put is synchronous (requests-based); run it off the event loop.
-    # The store's BLOB_READ_WRITE_TOKEN is read from the environment.
-    result = await asyncio.to_thread(
-        vercel_blob.put,
-        pathname,
-        data,
-        blob_options(addRandomSuffix="false"),
-    )
-    applicant.files.append(
-        ApplicantFile(
-            id=file_id,
-            filename=filename,
-            size=len(data),
-            content_type=content_type,
-            storage_ref=result["url"],
-        )
+    await files_service.create_file(
+        foreign_id=applicant.id,
+        workspace_id=applicant.workspace_id,
+        filename=filename,
+        content_type=content_type,
+        data=data,
+        uploaded_by=uploaded_by,
     )
     if resume_text:
         applicant.resume_text = resume_text
@@ -129,5 +121,7 @@ async def delete_applicant(applicant: Applicant) -> bool:
         ApplicantJob.applicant_id == applicant.id,
         ApplicantJob.workspace_id == applicant.workspace_id,
     ).delete()
+    # Remove stored files (blobs + metadata) linked to this applicant.
+    await files_service.delete_files_for(applicant.id, applicant.workspace_id)
     result = await applicant.delete()
     return result is not None and result.acknowledged
