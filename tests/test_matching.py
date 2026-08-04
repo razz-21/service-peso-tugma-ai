@@ -249,10 +249,31 @@ def test_experience_qualitative_high_similarity_is_met() -> None:
     assert reason is None
 
 
-def test_experience_combines_years_and_qualitative() -> None:
-    # Years met (1.0) averaged with calibrated qualitative (0.35 -> 0.5) = 0.75.
+def test_experience_gates_years_by_field_not_averaged() -> None:
+    # Years met (1.0) gated by calibrated qualitative (0.35 -> 0.5): min = 0.5, a
+    # "partial", not the 0.75 the old average produced. The field is only
+    # partially related, so met years cannot lift it into "Met".
     score, reason = experience_match(5.0, 3.0, qualitative_similarity=0.35)
-    assert math.isclose(score, 0.75)
+    assert math.isclose(score, 0.5)
+    # Gate hasn't cleared "Met", so no "N+ yrs" chip is surfaced.
+    assert reason is None
+
+
+def test_experience_met_years_do_not_mask_unrelated_field() -> None:
+    # The reported bug: a Quality Assurance / Developer background (near-zero
+    # cosine) against a "5 years as a pet salon staff" requirement. Even with the
+    # years requirement fully met, the unrelated field gates the score to ~0.0 so
+    # the requirement reads "not met" rather than "partial".
+    score, reason = experience_match(8.0, 5.0, qualitative_similarity=0.16)
+    assert score < 0.4
+    assert reason is None
+
+
+def test_experience_related_field_and_met_years_is_met() -> None:
+    # A genuine pet-salon applicant: strong field (0.60 -> 1.0) and met years both
+    # clear the gate, so the requirement reads "Met" and surfaces the years chip.
+    score, reason = experience_match(6.0, 5.0, qualitative_similarity=0.60)
+    assert score == 1.0
     assert reason is not None
 
 
@@ -265,9 +286,17 @@ def test_education_meets_or_exceeds() -> None:
     assert reason == "Bachelor's Degree"
 
 
-def test_education_below_requirement_is_ratio() -> None:
-    score, _ = education_match("High School", ["Bachelor's Degree"])
-    assert math.isclose(score, 2 / 5)  # high school rank 2 / bachelor rank 5
+def test_education_below_requirement_decays_by_distance() -> None:
+    # Ordinal distance, not the rank quotient. Bachelor is rank 5.
+    # Vocational (rank 4) is one rung short -> 0.5 ("Partial"), not 4/5 = 0.8.
+    vocational, _ = education_match("Vocational / Technical", ["Bachelor's Degree"])
+    assert math.isclose(vocational, 0.5)
+    # Senior High (rank 3) is two rungs short -> 0.25 ("Not met").
+    senior_high, _ = education_match("Senior High", ["Bachelor's Degree"])
+    assert math.isclose(senior_high, 0.25)
+    # High School (rank 2) is three rungs short -> 0.0.
+    high_school, _ = education_match("High School", ["Bachelor's Degree"])
+    assert math.isclose(high_school, 0.0)
 
 
 def test_education_no_requirement_is_full_score() -> None:

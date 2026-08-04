@@ -187,6 +187,13 @@ _EXPERIENCE_FILLER = frozenset(
 _SIM_LOW = 0.15
 _SIM_HIGH = 0.55
 
+# The experience sub-score at/above which the requirement reads as "Met". Kept in
+# sync with the frontend's `statusFromScore` cutoff (score >= 80 -> met) so the
+# backend only surfaces a "N+ yrs experience" chip when the gate as a whole — the
+# field/role *and* the years — would actually show "Met". Mirrors the education
+# match's `_EDUCATION_MET_THRESHOLD`.
+_EXPERIENCE_MET_THRESHOLD = 0.8
+
 
 def parse_required_years(text: str | None) -> float | None:
     """Extract a required-years figure from free text (e.g. ``"3 years"``).
@@ -233,7 +240,9 @@ def experience_match(
 ) -> tuple[float, str | None]:
     """Score an applicant's experience against a job's requirement.
 
-    Averages whichever of two independent components are present:
+    The requirement may carry two independent constraints, and the applicant
+    must satisfy **both** — so they combine as a gate (the minimum), not an
+    average:
 
     * **Years** — ratio of ``applicant_years`` to ``required_years`` (capped at
       1.0), when the requirement names a number of years.
@@ -241,10 +250,18 @@ def experience_match(
       field/role wording and the applicant's experience, supplied as a raw cosine
       via ``qualitative_similarity`` (the embedding is computed by the caller).
 
+    Taking the minimum means met years can no longer mask an unrelated field
+    (e.g. a Quality Assurance / Developer background against a "5 years as a pet
+    salon staff" requirement): the near-zero qualitative score becomes the
+    experience score, so the requirement reads as unmet rather than "partial".
+    Previously the two were averaged, so enough years in *any* field lifted an
+    unrelated applicant to ~0.5 ("partial"). This mirrors the education match's
+    level/field gate.
+
     When neither component is present the requirement is treated as no constraint
-    (1.0) — previously the qualitative case was silently treated this way, so a
-    field/role requirement always scored "met". Returns ``(score, reason)`` where
-    ``reason`` is set only when a years requirement is met.
+    (1.0). Returns ``(score, reason)`` where ``reason`` — the applicant's years —
+    is set only when the gate as a whole clears the "Met" threshold, so an
+    unrelated field never surfaces a "N+ yrs experience" chip.
     """
     years_score: float | None = None
     if required_years is not None and required_years > 0:
@@ -259,10 +276,12 @@ def experience_match(
     components = [score for score in (years_score, qualitative_score) if score is not None]
     if not components:
         return 1.0, None
-    score = sum(components) / len(components)
+    # Gate, not average: the weakest satisfied constraint bounds the score, so an
+    # unrelated field can't be lifted into "partial"/"met" by met years.
+    score = min(components)
     reason = (
         f"{applicant_years:.1f}+ yrs experience"
-        if years_score is not None and years_score >= 1.0
+        if years_score is not None and years_score >= 1.0 and score >= _EXPERIENCE_MET_THRESHOLD
         else None
     )
     return score, reason
@@ -277,6 +296,13 @@ def experience_match(
 # field-of-study bar: education is "Met" only when the calibrated course
 # similarity itself clears 0.8, i.e. a genuinely related field.
 _EDUCATION_MET_THRESHOLD = 0.8
+
+# Sub-score lost per ladder rung the applicant falls short of the required level.
+# The ladder is *ordinal*, so distance — not the raw rank quotient — is what
+# carries meaning: one rung short anchors at 0.5 ("Partial") and each further
+# rung subtracts a step, so two rungs short already reads "Not met".
+_EDUCATION_LEVEL_STEP = 0.25
+_EDUCATION_ONE_RUNG_SHORT = 0.5
 
 # Education levels ordered low -> high. Each entry maps keyword fragments to an
 # ordinal rank; more specific/higher levels are listed first so the first match
@@ -327,8 +353,11 @@ def education_match(
 
     * **Level** — an ordinal comparison of the applicant's highest education
       level against the job's minimum attainment ladder: 1.0 when the applicant
-      meets/exceeds the lowest required level, a partial ratio when below, 0.0
-      when the applicant's level is unrecognized.
+      meets/exceeds the lowest required level; below it the score decays by
+      *distance* (one rung short → 0.5, each further rung −0.25) rather than the
+      raw rank quotient, which overstated "one rung below" (rank 4 / rank 5 =
+      0.8 read a vocational grad as 80% of a bachelor's); 0.0 when the
+      applicant's level is unrecognized.
     * **Course/program** — a calibrated semantic similarity between the job's
       preferred course of study and the applicant's, supplied as a raw MiniLM
       cosine via ``course_similarity`` (the embedding is computed by the
@@ -363,7 +392,10 @@ def education_match(
             level_score = 1.0
             level_reason = highest_level
         else:
-            level_score = applicant_rank / required_rank
+            # Ordinal distance decay, not the rank quotient: one rung short reads
+            # "Partial", two rungs short "Not met". Ranks aren't a ratio scale.
+            gap = required_rank - applicant_rank
+            level_score = max(0.0, _EDUCATION_ONE_RUNG_SHORT - (gap - 1) * _EDUCATION_LEVEL_STEP)
 
     # Course/program field-of-study component. Reuses the experience match's
     # MiniLM calibration band since both compare the same sentence model's
