@@ -22,12 +22,12 @@ class Settings(BaseSettings):
     # Hosted embedding inference endpoint. The job-matching pipeline no longer
     # loads sentence-transformers locally (torch is far too large for serverless
     # bundles); it calls this endpoint instead, which must serve the paper's
-    # model `sentence-transformers/all-MiniLM-L12-v2` so the produced vectors —
+    # model `sentence-transformers/all-MiniLM-L6-v2` so the produced vectors —
     # and therefore the calibrated cosine bands in matching/scoring.py — stay
     # identical. Defaults to the Hugging Face Inference API for that model.
     EMBEDDING_API_URL: str = (
         "https://router.huggingface.co/hf-inference/models/"
-        "sentence-transformers/all-MiniLM-L12-v2/pipeline/feature-extraction"
+        "sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction"
     )
     # Bearer token for the embedding endpoint (HF token by default). Required in
     # practice — the public HF Inference API rejects unauthenticated requests.

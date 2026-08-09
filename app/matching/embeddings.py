@@ -1,7 +1,7 @@
 """Semantic embedding generation for the job-matching AI pipeline (Figure 11).
 
 Embeddings are produced by a hosted inference endpoint serving the paper's
-selected model (`sentence-transformers/all-MiniLM-L12-v2`) rather than loading
+selected model (`sentence-transformers/all-MiniLM-L6-v2`) rather than loading
 the model locally — torch and its CUDA wheels are far too large for a serverless
 bundle. The endpoint returns the same mean-pooled sentence vectors, so the
 calibrated cosine bands in ``scoring.py`` need no re-tuning.
