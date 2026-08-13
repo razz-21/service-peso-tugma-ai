@@ -59,10 +59,17 @@ def job_to_text(job: Job) -> str:
         parts.append(job.description)
     if job.skills_required:
         parts.append("skills " + " ".join(job.skills_required))
+    # Preferred skills are folded into the semantic text too, so a nice-to-have
+    # skill still contributes to the cosine similarity and editing it triggers a
+    # re-embed (see the `embedding_source` fingerprint in the recommender).
+    if job.preferred_skills:
+        parts.append("skills " + " ".join(job.preferred_skills))
     if job.experience_required:
         parts.append(job.experience_required)
     if job.minimum_education_attainment:
         parts.append(" ".join(job.minimum_education_attainment))
+    if job.preferred_education:
+        parts.append(" ".join(job.preferred_education))
     if job.course_program:
         parts.append(job.course_program)
     return preprocess(_join(parts))

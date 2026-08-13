@@ -27,6 +27,15 @@ class Job(Document):
     course_program: str | None = None
     experience_required: str | None = None
     skills_required: list[str] = Field(default_factory=list)
+    # Requirement tiering (additive, backward-compatible): the fields above are the
+    # mandatory (must-have) tier; these are the preferred (nice-to-have) tier the
+    # scorer treats as a bounded bonus. Empty / False on documents written before
+    # tiering existed, so every existing requirement stays fully mandatory.
+    preferred_skills: list[str] = Field(default_factory=list)
+    preferred_education: list[str] = Field(default_factory=list)
+    # When True, `experience_required` is a preferred (bonus-only) constraint: an
+    # unmet experience requirement adds no penalty. When False it is mandatory.
+    experience_is_preferred: bool = False
     no_of_vacancies: int = 0
     salary_per_month: int | None = None
     # Work location / address of the job. Used by the matching pipeline's

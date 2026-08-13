@@ -47,6 +47,10 @@ class SkillMatch(BaseModel):
     applicant: str | None = None
     similarity: int = Field(default=0, ge=0, le=100)
     state: str = "missing"
+    # "mandatory" (a required skill) or "preferred" (a nice-to-have). Lets the UI
+    # show "missing (required)" vs. "missing (preferred)". Defaults to "mandatory"
+    # on records written before requirement tiering existed.
+    tier: str = "mandatory"
 
 
 class RecommendedJob(Document):

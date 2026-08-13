@@ -35,12 +35,16 @@ from app.matching.scoring import (
     classify_skill_matches,
     combined_score,
     cosine_similarity,
+    education_mandatory_met,
     education_match,
+    experience_mandatory_met,
     experience_match,
     experience_requirement_terms,
     location_match,
     parse_required_years,
+    skills_mandatory_covered,
     skills_match,
+    tiered_score,
 )
 
 # --- Preprocessing ---------------------------------------------------------
@@ -457,6 +461,150 @@ def test_weights_from_percent_normalizes() -> None:
     assert weights.location == 0.05
 
 
+# --- Requirement tiering ---------------------------------------------------
+
+
+def test_tiered_score_mandatory_met_no_preferred_coverage_is_base() -> None:
+    # All mandatory met, preferred tier present but uncovered → the base 1 - cap.
+    assert math.isclose(tiered_score(1.0, 0.0, has_mandatory=True), 0.80)
+
+
+def test_tiered_score_all_mandatory_and_preferred_is_full() -> None:
+    assert math.isclose(tiered_score(1.0, 1.0, has_mandatory=True), 1.0)
+
+
+def test_tiered_score_missing_mandatory_caps_below_base_and_preferred_cannot_compensate() -> None:
+    # Half the mandatory met → 0.40 even with the preferred tier fully covered.
+    assert math.isclose(tiered_score(0.5, 1.0, has_mandatory=True), 0.40)
+
+
+def test_tiered_score_no_preferred_tier_is_inert() -> None:
+    # Backward compatibility: with no preferred tier the criterion keeps its raw
+    # mandatory coverage (a met one stays 1.0, not the 0.80 base).
+    assert math.isclose(tiered_score(1.0, 0.0, has_mandatory=True, has_preferred=False), 1.0)
+    assert math.isclose(tiered_score(0.5, 0.0, has_mandatory=True, has_preferred=False), 0.5)
+
+
+def test_tiered_score_no_mandatory_constraint_is_base_plus_bonus() -> None:
+    # No mandatory items → base is full and only the preferred bonus applies.
+    assert math.isclose(tiered_score(0.0, 0.5, has_mandatory=False), 0.90)
+
+
+def test_tiered_score_respects_custom_bonus_cap() -> None:
+    assert math.isclose(tiered_score(1.0, 0.0, has_mandatory=True, bonus_cap=0.5), 0.5)
+    assert math.isclose(tiered_score(1.0, 1.0, has_mandatory=True, bonus_cap=0.5), 1.0)
+
+
+def test_skills_required_present_preferred_absent_is_high() -> None:
+    # Computer Literacy (required) present, Communication (preferred) absent → high.
+    score, matched = skills_match(
+        ["Computer Literacy"], ["Computer Literacy"], preferred_skills=["Communication"]
+    )
+    assert math.isclose(score, 0.80)
+    assert matched == ["Computer Literacy"]
+
+
+def test_skills_preferred_present_required_absent_is_low() -> None:
+    # Communication (preferred) present, Computer Literacy (required) absent → low.
+    score, matched = skills_match(
+        ["Communication"], ["Computer Literacy"], preferred_skills=["Communication"]
+    )
+    assert math.isclose(score, 0.0)
+    assert matched == ["Communication"]  # the satisfied preferred skill is still listed
+
+
+def test_skills_all_mandatory_and_preferred_is_full() -> None:
+    score, matched = skills_match(["Python", "Docker"], ["Python"], preferred_skills=["Docker"])
+    assert math.isclose(score, 1.0)
+    assert matched == ["Python", "Docker"]
+
+
+def test_skills_all_mandatory_only_is_base() -> None:
+    # Mandatory met, preferred tier present but uncovered → the 0.80 base.
+    score, _ = skills_match(["Python"], ["Python"], preferred_skills=["Docker"])
+    assert math.isclose(score, 0.80)
+
+
+def test_skills_half_mandatory_met_with_preferred_is_capped() -> None:
+    score, _ = skills_match(["Python"], ["Python", "Django"], preferred_skills=["Docker"])
+    assert math.isclose(score, 0.40)
+
+
+def test_skills_no_preferred_tier_is_unchanged_behavior() -> None:
+    # Backward compatibility: without a preferred tier the score is the raw
+    # mandatory coverage, exactly as before tiering existed.
+    score, _ = skills_match(["Python"], ["Python", "Django"])
+    assert math.isclose(score, 0.5)
+
+
+def test_classify_skill_matches_tags_tier() -> None:
+    matches = classify_skill_matches(
+        ["Python"], ["Python", "Django"], None, ["Docker"]
+    )
+    by_skill = {m.required: m for m in matches}
+    assert by_skill["Python"].tier == "mandatory" and by_skill["Python"].state == "matched"
+    assert by_skill["Django"].tier == "mandatory" and by_skill["Django"].state == "missing"
+    assert by_skill["Docker"].tier == "preferred" and by_skill["Docker"].state == "missing"
+
+
+def test_education_preferred_adds_bounded_bonus() -> None:
+    # Mandatory level met (1.0); preferred Master's is one rung above a Bachelor's
+    # → 0.5 preferred coverage → 0.80 + 0.20 * 0.5 = 0.90.
+    score, reason = education_match(
+        "Bachelor's Degree", ["High School"], preferred_education=["Master's Degree"]
+    )
+    assert math.isclose(score, 0.90)
+    assert reason == "Bachelor's Degree"
+
+
+def test_education_preferred_cannot_compensate_missing_mandatory() -> None:
+    # Mandatory Bachelor's unmet (applicant only High School) → capped low; a met
+    # preferred level cannot lift it.
+    score, _ = education_match(
+        "High School", ["Bachelor's Degree"], preferred_education=["High School"]
+    )
+    assert math.isclose(score, 0.0)
+
+
+def test_education_no_preferred_tier_is_unchanged_behavior() -> None:
+    # Backward compatibility: a met mandatory level with no preferred tier stays 1.0.
+    score, _ = education_match("Bachelor's Degree", ["High School"])
+    assert math.isclose(score, 1.0)
+
+
+def test_experience_preferred_unmet_adds_no_penalty() -> None:
+    # A preferred experience requirement only lifts the score: an unmet one stays
+    # at the base (no penalty), a met one reaches full.
+    unmet, _ = experience_match(1.0, 4.0, is_preferred=True)  # raw ratio 0.25
+    assert math.isclose(unmet, 0.85)  # 0.80 + 0.20 * 0.25
+    met, _ = experience_match(5.0, 3.0, is_preferred=True)
+    assert math.isclose(met, 1.0)
+
+
+def test_experience_mandatory_unchanged_behavior() -> None:
+    # Backward compatibility: a mandatory experience requirement is the raw gate.
+    score, _ = experience_match(1.0, 4.0)
+    assert math.isclose(score, 0.25)
+
+
+def test_skills_mandatory_covered_gate() -> None:
+    assert skills_mandatory_covered(["Python", "Django"], ["Python", "Django"]) is True
+    assert skills_mandatory_covered(["Python"], ["Python", "Django"]) is False
+    assert skills_mandatory_covered([], []) is True  # no requirement → vacuously covered
+
+
+def test_education_mandatory_met_gate() -> None:
+    assert education_mandatory_met("Bachelor's Degree", ["High School"]) is True
+    assert education_mandatory_met("High School", ["Bachelor's Degree"]) is False
+    assert education_mandatory_met(None, []) is True  # no requirement
+
+
+def test_experience_mandatory_met_gate() -> None:
+    assert experience_mandatory_met(5.0, 3.0) is True
+    assert experience_mandatory_met(1.0, 4.0) is False
+    assert experience_mandatory_met(0.0, None) is True  # no requirement
+
+
 # --- Profile builders ------------------------------------------------------
 
 
@@ -534,14 +682,20 @@ def test_job_to_text_is_preprocessed() -> None:
         title="Senior Backend Engineer",
         description="Build APIs.",
         skills_required=["Python", "MongoDB"],
+        preferred_skills=["Kubernetes"],
         experience_required="3 years",
         minimum_education_attainment=["Bachelor's Degree"],
+        preferred_education=["Master's Degree"],
         course_program="BS Computer Science",
     )
     text = job_to_text(job)  # type: ignore[arg-type]
     assert "senior backend engineer" in text
     assert "mongodb" in text
     assert "computer science" in text
+    # Preferred skills/education are folded into the semantic text too, so editing
+    # them re-embeds the job and they contribute to the cosine similarity.
+    assert "kubernetes" in text
+    assert "master" in text
     assert "." not in text
 
 

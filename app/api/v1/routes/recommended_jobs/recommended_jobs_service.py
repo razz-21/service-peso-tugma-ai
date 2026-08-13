@@ -6,6 +6,7 @@ from beanie.operators import NE, Eq, In
 
 from app.api.v1.routes.applicants.applicants_models import Applicant
 from app.api.v1.routes.workspaces.workspaces_models import Workspace
+from app.core.config import settings
 from app.matching.embeddings import embed, embed_batch
 from app.matching.preprocessing import strip_degree_framing
 from app.matching.primary_requirements import eligibility_matches, meets_primary_requirements
@@ -23,11 +24,14 @@ from app.matching.scoring import (
     classify_skill_matches,
     combined_score,
     cosine_similarity,
+    education_mandatory_met,
     education_match,
+    experience_mandatory_met,
     experience_match,
     experience_requirement_terms,
     location_match,
     parse_required_years,
+    skills_mandatory_covered,
     skills_match,
 )
 
@@ -388,14 +392,21 @@ async def generate_recommendations(
     course_vectors = embed_batch([job_course_terms[job.id] for job in course_jobs])
     job_course_vec = {job.id: vec for job, vec in zip(course_jobs, course_vectors, strict=True)}
 
-    # Embed the unique required skills across all candidate jobs once, so the
-    # per-job loop can cosine-match each against the applicant's skills (for the
-    # semantic skills score) without re-encoding. Only needed when the applicant
-    # lists skills; otherwise the skills match falls back to exact tokens.
+    # Embed the unique required *and preferred* skills across all candidate jobs
+    # once, so the per-job loop can cosine-match each against the applicant's
+    # skills (for the semantic skills score) without re-encoding. Preferred skills
+    # are embedded too so the nice-to-have tier gets the same semantic matching.
+    # Only needed when the applicant lists skills; otherwise the skills match
+    # falls back to exact tokens.
     required_skill_vecs: dict[str, list[float]] = {}
     if applicant_skill_vecs:
         unique_required = sorted(
-            {skill.strip() for job in jobs for skill in job.skills_required if skill.strip()}
+            {
+                skill.strip()
+                for job in jobs
+                for skill in (*job.skills_required, *job.preferred_skills)
+                if skill.strip()
+            }
         )
         if unique_required:
             skill_vectors = embed_batch(unique_required)
@@ -414,7 +425,8 @@ async def generate_recommendations(
         skill_sources: dict[str, tuple[str | None, float]] = {}
         if applicant_skill_vecs and required_skill_vecs:
             skill_similarities = {}
-            for skill in job.skills_required:
+            # Both tiers are matched semantically against the applicant's skills.
+            for skill in (*job.skills_required, *job.preferred_skills):
                 key = skill.strip()
                 required_vec = required_skill_vecs.get(key)
                 if required_vec is None:
@@ -429,7 +441,11 @@ async def generate_recommendations(
                 skill_similarities[key] = best_cosine
                 skill_sources[key] = (best_name, best_cosine)
         skills, matched_skills = skills_match(
-            applicant.technical_skills, job.skills_required, skill_similarities
+            applicant.technical_skills,
+            job.skills_required,
+            skill_similarities,
+            job.preferred_skills,
+            bonus_cap=settings.REQUIREMENT_BONUS_CAP,
         )
         skill_matches = [
             SkillMatch(
@@ -437,9 +453,13 @@ async def generate_recommendations(
                 applicant=match.applicant,
                 similarity=round(match.similarity * 100),
                 state=match.state,
+                tier=match.tier,
             )
             for match in classify_skill_matches(
-                applicant.technical_skills, job.skills_required, skill_sources or None
+                applicant.technical_skills,
+                job.skills_required,
+                skill_sources or None,
+                job.preferred_skills,
             )
         ]
         qualitative_similarity: float | None = None
@@ -450,10 +470,13 @@ async def generate_recommendations(
                 if applicant_experience_vec is not None and qual_vec is not None
                 else 0.0
             )
+        required_years = parse_required_years(job.experience_required)
         experience, experience_reason = experience_match(
             applicant_years,
-            parse_required_years(job.experience_required),
+            required_years,
             qualitative_similarity,
+            is_preferred=job.experience_is_preferred,
+            bonus_cap=settings.REQUIREMENT_BONUS_CAP,
         )
         course_similarity: float | None = None
         if job_course_terms[job.id]:
@@ -464,8 +487,30 @@ async def generate_recommendations(
                 else 0.0
             )
         education, education_reason = education_match(
-            highest_education, job.minimum_education_attainment, course_similarity
+            highest_education,
+            job.minimum_education_attainment,
+            course_similarity,
+            job.preferred_education,
+            bonus_cap=settings.REQUIREMENT_BONUS_CAP,
         )
+        # Optional hard-gate: when GATE_ON_MANDATORY is enabled, exclude the job
+        # entirely if the applicant fails any mandatory (must-have) requirement,
+        # alongside the primary-requirement gates applied before scoring. Preferred
+        # tiers never gate. Off by default — the soft penalty (a missing must-have
+        # caps the criterion below 1 - bonus_cap) applies instead.
+        if settings.GATE_ON_MANDATORY and not (
+            skills_mandatory_covered(
+                applicant.technical_skills, job.skills_required, skill_similarities
+            )
+            and education_mandatory_met(
+                highest_education, job.minimum_education_attainment, course_similarity
+            )
+            and (
+                job.experience_is_preferred
+                or experience_mandatory_met(applicant_years, required_years, qualitative_similarity)
+            )
+        ):
+            continue
         location, location_reason = location_match(applicant.preferred_work_location, job.location)
         breakdown = ScoreBreakdown(
             semantic_similarity=semantic,

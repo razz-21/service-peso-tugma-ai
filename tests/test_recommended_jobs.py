@@ -65,6 +65,9 @@ def _job(
     sex: str | None = None,
     civil_status: list[str] | None = None,
     skills_required: list[str] | None = None,
+    preferred_skills: list[str] | None = None,
+    preferred_education: list[str] | None = None,
+    experience_is_preferred: bool = False,
 ) -> SimpleNamespace:
     """A minimal job carrying only the attributes the service touches."""
     return SimpleNamespace(
@@ -75,6 +78,9 @@ def _job(
         sex=sex,
         civil_status=civil_status or [],
         skills_required=skills_required or ["Python"],
+        preferred_skills=preferred_skills or [],
+        preferred_education=preferred_education or [],
+        experience_is_preferred=experience_is_preferred,
         experience_required=None,
         minimum_education_attainment=[],
         course_program=None,

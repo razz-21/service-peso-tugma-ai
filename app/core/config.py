@@ -34,6 +34,18 @@ class Settings(BaseSettings):
     EMBEDDING_API_TOKEN: str = ""
     EMBEDDING_API_TIMEOUT: float = 30.0
 
+    # Requirement tiering (see matching/scoring.tiered_score). A criterion splits
+    # its items into a mandatory (must-have) and a preferred (nice-to-have) tier.
+    # `REQUIREMENT_BONUS_CAP` is the most a fully-satisfied preferred tier can lift
+    # a criterion whose mandatory tier is met (0.80 → 1.00 at cap 0.20); preferred
+    # items can never compensate for a missing mandatory one.
+    REQUIREMENT_BONUS_CAP: float = 0.20
+    # Hard-gate mode: when True, a job is excluded from recommendations entirely if
+    # the applicant fails any mandatory requirement (mandatory coverage < 1.0),
+    # alongside the existing primary-requirement gates. Default False applies the
+    # soft-penalty formula instead (a missing must-have caps the criterion < 0.80).
+    GATE_ON_MANDATORY: bool = False
+
     CORS_ORIGINS: str = "http://localhost:3000"
 
     # Vercel Blob read/write token. The `vercel_blob` library reads this from
