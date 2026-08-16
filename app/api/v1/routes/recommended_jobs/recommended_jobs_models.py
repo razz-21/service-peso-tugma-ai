@@ -101,8 +101,13 @@ class RecommendedJob(Document):
     date_registered: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+    # When the applicant was referred to this job. Stamped fresh on creation (a
+    # manual referral is created directly in the `referred` status), and re-stamped
+    # by the client when an AI recommendation is advanced to `referred` via PATCH,
+    # so the Referred jobs panel can sort by the actual referral time.
+    referred_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
-    @field_validator("date_registered", "created_at", "updated_at", mode="before")
+    @field_validator("date_registered", "created_at", "updated_at", "referred_at", mode="before")
     @classmethod
     def _to_isoformat(cls, value: object) -> object:
         # Tolerate documents whose timestamps were stored as BSON datetimes.

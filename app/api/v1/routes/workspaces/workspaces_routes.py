@@ -1,12 +1,13 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
 from app.api.deps import authorize_workspace_access, get_current_user, require_roles
 from app.api.v1.routes.audit_logs import audit_logs_service
 from app.api.v1.routes.audit_logs.audit_logs_models import AuditDiffRow, AuditEntity, AuditTone
 from app.api.v1.routes.users.users_models import User, UserRole
+from app.core.blob import AVATAR_CONTENT_TYPE_EXTENSIONS, AVATAR_MAX_BYTES
 
 from . import workspaces_service
 from .workspaces_models import MatchingScore, Workspace
@@ -152,6 +153,52 @@ async def update_workspace(
     previous_weights = workspace.matching_score.model_copy()
     workspace = await workspaces_service.update_workspace(workspace, data)
     await _record_workspace_update(current_user, workspace, data, previous_weights)
+    return WorkspaceRead.model_validate(workspace)
+
+
+@router.post("/{workspace_id}/avatar", response_model=WorkspaceRead)
+async def upload_workspace_avatar(
+    workspace_id: UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    file: Annotated[UploadFile, File()],
+) -> WorkspaceRead:
+    # Uploads the image to Vercel Blob and stores its URL on the workspace. Rejects
+    # unsupported types (415), empty (400), and files over 5 MB (413).
+    authorize_workspace_access(current_user, workspace_id)
+    workspace = await workspaces_service.get_workspace(workspace_id)
+    if workspace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+    extension = AVATAR_CONTENT_TYPE_EXTENSIONS.get(file.content_type or "")
+    if extension is None:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Only JPEG, PNG, WebP, or GIF images are supported.",
+        )
+    data = await file.read()
+    if not data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The uploaded image is empty.",
+        )
+    if len(data) > AVATAR_MAX_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Image exceeds the 5 MB limit.",
+        )
+    workspace = await workspaces_service.set_workspace_avatar(
+        workspace, extension=extension, data=data
+    )
+    await audit_logs_service.record_audit(
+        workspace_id=workspace.id,
+        entity=AuditEntity.WORKSPACES,
+        entity_label="Workspace",
+        actor=current_user.fullname,
+        action="updated a workspace avatar",
+        icon="workspaces",
+        icon_tone=AuditTone.GREEN,
+        chip_tone=AuditTone.GREEN,
+        records=[workspace.name],
+    )
     return WorkspaceRead.model_validate(workspace)
 
 

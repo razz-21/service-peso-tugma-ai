@@ -13,6 +13,7 @@ class WorkspaceRef(BaseModel):
 
     id: UUID
     name: str
+    avatar: str | None = None
 
 
 class UserBase(BaseModel):

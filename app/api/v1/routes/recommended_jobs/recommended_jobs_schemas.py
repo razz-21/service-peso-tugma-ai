@@ -86,8 +86,9 @@ class RecommendedJobBase(BaseModel):
     date_registered: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+    referred_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
-    @field_validator("date_registered", "created_at", "updated_at", mode="before")
+    @field_validator("date_registered", "created_at", "updated_at", "referred_at", mode="before")
     @classmethod
     def _to_isoformat(cls, value: object) -> object:
         if isinstance(value, datetime):
@@ -122,6 +123,9 @@ class RecommendedJobPatch(BaseModel):
     embedded_job: list[float] | None = None
     key_matched: list[str] | None = None
     assessed_by: UUID | None = None
+    # Set by the client when it advances a recommendation to `referred`, stamping
+    # the referral time. Only applied when present (the patch uses exclude_unset).
+    referred_at: str | None = None
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
