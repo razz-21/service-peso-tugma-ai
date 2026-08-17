@@ -180,6 +180,17 @@ async def delete_job(
     job = await jobs_service.get_job(job_id, workspace_id=workspace_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    referrals = await jobs_service.count_job_referrals(job_id, workspace_id=workspace_id)
+    if referrals > 0:
+        # Referential integrity: the job is used by applicant referral/placement
+        # records. Refuse the delete rather than orphan them.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Cannot delete this job because it is used by "
+                f"{referrals} applicant referral record(s). "
+            ),
+        )
     job_title = job.title
     if not await jobs_service.delete_job(job):
         raise HTTPException(

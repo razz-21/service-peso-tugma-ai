@@ -16,3 +16,9 @@ async def test_upload_my_avatar_requires_auth(client: AsyncClient) -> None:
         files={"file": ("avatar.png", b"\x89PNG\r\n", "image/png")},
     )
     assert response.status_code == 401
+
+
+async def test_remove_my_avatar_requires_auth(client: AsyncClient) -> None:
+    # Avatar removal is likewise gated on auth — rejected before any Blob call.
+    response = await client.delete(f"{settings.API_V1_PREFIX}/me/avatar")
+    assert response.status_code == 401

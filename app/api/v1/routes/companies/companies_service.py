@@ -4,7 +4,7 @@ from uuid import UUID
 
 from beanie.operators import Or, RegEx
 
-from app.core.blob import replace_avatar_blob
+from app.core.blob import delete_avatar_blob, replace_avatar_blob
 
 from .companies_models import Company
 from .companies_schemas import CompanyCreate, CompanyPatch
@@ -57,6 +57,15 @@ async def set_company_avatar(company: Company, *, extension: str, data: bytes) -
         data=data,
         previous_url=company.avatar,
     )
+    company.updated_at = datetime.now(UTC).isoformat()
+    await company.save()
+    return company
+
+
+async def clear_company_avatar(company: Company) -> Company:
+    """Remove the company's avatar, deleting the stored Blob best-effort."""
+    await delete_avatar_blob(company.avatar)
+    company.avatar = None
     company.updated_at = datetime.now(UTC).isoformat()
     await company.save()
     return company

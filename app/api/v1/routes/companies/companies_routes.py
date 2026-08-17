@@ -139,6 +139,31 @@ async def upload_company_avatar(
     return CompanyRead.model_validate(company)
 
 
+@router.delete("/{company_id}/avatar", response_model=CompanyRead)
+async def remove_company_avatar(
+    company_id: UUID,
+    workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> CompanyRead:
+    # Clears the avatar URL and removes the stored Blob; a no-op when unset.
+    company = await companies_service.get_company(company_id, workspace_id=workspace_id)
+    if company is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
+    company = await companies_service.clear_company_avatar(company)
+    await audit_logs_service.record_audit(
+        workspace_id=workspace_id,
+        entity=AuditEntity.COMPANY,
+        entity_label="Company",
+        actor=current_user.fullname,
+        action="removed a company avatar",
+        icon="apartment",
+        icon_tone=AuditTone.GREEN,
+        chip_tone=AuditTone.GREEN,
+        records=[company.company_name],
+    )
+    return CompanyRead.model_validate(company)
+
+
 @router.delete("/{company_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_company(
     company_id: UUID,

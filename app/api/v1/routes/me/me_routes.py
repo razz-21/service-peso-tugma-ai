@@ -75,3 +75,12 @@ async def upload_my_avatar(
         )
     user = await user_service.set_user_avatar(current_user, extension=extension, data=data)
     return await user_service.build_user_read(user)
+
+
+@router.delete("/avatar", response_model=UserRead)
+async def remove_my_avatar(
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> UserRead:
+    # Clears the avatar URL and removes the stored Blob; a no-op when unset.
+    user = await user_service.clear_user_avatar(current_user)
+    return await user_service.build_user_read(user)

@@ -60,3 +60,15 @@ async def replace_avatar_blob(
         with contextlib.suppress(Exception):
             await asyncio.to_thread(vercel_blob.delete, previous_url, blob_options())
     return str(result["url"])
+
+
+async def delete_avatar_blob(url: str | None) -> None:
+    """Delete a stored avatar Blob best-effort.
+
+    A missing URL is a no-op, and a failed deletion is swallowed so clearing an
+    avatar never fails on cleanup — the record is updated regardless.
+    """
+    if not url:
+        return
+    with contextlib.suppress(Exception):
+        await asyncio.to_thread(vercel_blob.delete, url, blob_options())

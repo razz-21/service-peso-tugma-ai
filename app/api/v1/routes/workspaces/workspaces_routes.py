@@ -202,6 +202,31 @@ async def upload_workspace_avatar(
     return WorkspaceRead.model_validate(workspace)
 
 
+@router.delete("/{workspace_id}/avatar", response_model=WorkspaceRead)
+async def remove_workspace_avatar(
+    workspace_id: UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> WorkspaceRead:
+    # Clears the avatar URL and removes the stored Blob; a no-op when unset.
+    authorize_workspace_access(current_user, workspace_id)
+    workspace = await workspaces_service.get_workspace(workspace_id)
+    if workspace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+    workspace = await workspaces_service.clear_workspace_avatar(workspace)
+    await audit_logs_service.record_audit(
+        workspace_id=workspace.id,
+        entity=AuditEntity.WORKSPACES,
+        entity_label="Workspace",
+        actor=current_user.fullname,
+        action="removed a workspace avatar",
+        icon="workspaces",
+        icon_tone=AuditTone.GREEN,
+        chip_tone=AuditTone.GREEN,
+        records=[workspace.name],
+    )
+    return WorkspaceRead.model_validate(workspace)
+
+
 @router.delete("/{workspace_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_workspace(
     workspace_id: UUID,
