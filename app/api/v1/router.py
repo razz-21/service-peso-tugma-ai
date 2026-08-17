@@ -2,7 +2,6 @@ from fastapi import APIRouter, Depends
 
 from app.api.deps import get_current_user
 from app.api.v1.routes import (
-    applicant_jobs,
     applicants,
     audit_logs,
     auth,
@@ -47,12 +46,6 @@ api_router.include_router(
     recommended_jobs.router,
     prefix="/recommended-jobs",
     tags=["recommended_jobs"],
-    dependencies=auth_required,
-)
-api_router.include_router(
-    applicant_jobs.router,
-    prefix="/applicant-jobs",
-    tags=["applicant_jobs"],
     dependencies=auth_required,
 )
 api_router.include_router(

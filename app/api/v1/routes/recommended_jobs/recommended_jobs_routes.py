@@ -262,10 +262,9 @@ async def update_recommended_job(
                 detail=transition_error,
             )
     # Referring the applicant (moving the recommendation into a vacancy-holding
-    # status) consumes one of the job's open seats — gate it on an open vacancy,
-    # mirroring the applicant_jobs referral path. Only a transition that *starts*
-    # holding a seat is gated; advancing between holding states or releasing one
-    # is unaffected.
+    # status) consumes one of the job's open seats — gate it on an open vacancy.
+    # Only a transition that *starts* holding a seat is gated; advancing between
+    # holding states or releasing one is unaffected.
     if data.status is not None and recommended_jobs_service.starts_holding_vacancy(
         recommended_job.status, data.status
     ):

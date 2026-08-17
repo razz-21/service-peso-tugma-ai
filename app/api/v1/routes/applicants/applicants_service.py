@@ -105,21 +105,16 @@ async def add_applicant_file(
 
 
 async def delete_applicant(applicant: Applicant) -> bool:
-    # Cascade: remove the applicant's dependent records (recommendations and
-    # applicant-job referrals, both keyed by `applicant_id`) before deleting the
-    # applicant, so no orphaned rows are left behind. Scoped to the applicant's
-    # workspace to stay within the tenant. Imported lazily to avoid a circular
-    # import: recommended_jobs' routes import this slice.
-    from app.api.v1.routes.applicant_jobs.applicant_jobs_models import ApplicantJob
+    # Cascade: remove the applicant's dependent recommendation records (keyed by
+    # `applicant_id`) before deleting the applicant, so no orphaned rows are left
+    # behind. Scoped to the applicant's workspace to stay within the tenant.
+    # Imported lazily to avoid a circular import: recommended_jobs' routes import
+    # this slice.
     from app.api.v1.routes.recommended_jobs.recommended_jobs_models import RecommendedJob
 
     await RecommendedJob.find(
         RecommendedJob.applicant_id == applicant.id,
         RecommendedJob.workspace_id == applicant.workspace_id,
-    ).delete()
-    await ApplicantJob.find(
-        ApplicantJob.applicant_id == applicant.id,
-        ApplicantJob.workspace_id == applicant.workspace_id,
     ).delete()
     # Remove stored files (blobs + metadata) linked to this applicant.
     await files_service.delete_files_for(applicant.id, applicant.workspace_id)
