@@ -68,6 +68,39 @@ for _canonical, _labels in {
     for _label in _labels:
         _HEADER_LOOKUP[_label] = _canonical
 
+# Non-target sections recognized ONLY as boundaries, so their content (project
+# blurbs, links, prose, references) can't bleed into the preceding target
+# section — e.g. a "PROJECTS" block leaking into SKILLS. Mapped to a sentinel key
+# that ``parse_resume`` never reads back, so the lines are effectively dropped.
+_IGNORED_SECTION = "_ignored"
+for _label in (
+    "PROJECTS",
+    "PROJECT",
+    "PERSONAL PROJECTS",
+    "KEY PROJECTS",
+    "ACADEMIC PROJECTS",
+    "AWARDS",
+    "AWARDS AND RECOGNITION",
+    "HONORS",
+    "ACHIEVEMENTS",
+    "REFERENCES",
+    "CHARACTER REFERENCES",
+    "LANGUAGES",
+    "INTERESTS",
+    "HOBBIES",
+    "AFFILIATIONS",
+    "ORGANIZATIONS",
+    "MEMBERSHIPS",
+    "SUMMARY",
+    "PROFESSIONAL SUMMARY",
+    "OBJECTIVE",
+    "CAREER OBJECTIVE",
+    "PORTFOLIO",
+    "PUBLICATIONS",
+    "VOLUNTEER EXPERIENCE",
+):
+    _HEADER_LOOKUP.setdefault(_label, _IGNORED_SECTION)
+
 _ADDRESS_KEYWORDS = (
     "street",
     "st.",
@@ -257,12 +290,37 @@ def _is_name_token(token: str) -> bool:
 
 
 # --- Skills ----------------------------------------------------------------
+# A link / email / handle, or a "key: value" / "id=..." label — none of which are
+# skills. Catches project links and prose that share the SKILLS block when a
+# resume gives no clean section break. Kept structural (not a domain word list) so
+# real skills like ".NET", "Socket.io" or "Node.js" are not falsely rejected.
+_NON_SKILL = re.compile(r"https?://|www\.|[@=:]|\.[a-z]{2,}/", re.IGNORECASE)
+# A sentence break (". A", "! The") marks bullet/description prose, not a skill.
+_SKILL_SENTENCE = re.compile(r"[.!?]\s+\S")
+
+
+def _looks_like_skill(token: str) -> bool:
+    """Whether a token reads like a technical skill rather than prose / a link.
+
+    Skills are short noun-phrases ("Material UI", "Unit Testing", "Hono-API"), so
+    reject long or multi-clause text, links, and labels. Conservative on purpose —
+    the officer can still add anything this drops (Human-in-the-Loop)."""
+    if not token or len(token) > 60:
+        return False
+    if len(token.split()) > 4:  # skills are 1-4 words; longer is a phrase/sentence
+        return False
+    if token.endswith(".."):  # OCR bullet tails like "etc.."
+        return False
+    # Reject links / labels ("Tech Stack:", "id=...") and multi-clause prose.
+    return not (_NON_SKILL.search(token) or _SKILL_SENTENCE.search(token))
+
+
 def _parse_skills(section: list[str]) -> list[str]:
     skills: list[str] = []
     seen: set[str] = set()
     for raw in re.split(r"[,;\n•|]", "\n".join(section)):
         skill = raw.strip(" \t-•").strip()
-        if not skill or len(skill) > 60:
+        if not _looks_like_skill(skill):
             continue
         key = skill.lower()
         if key not in seen:
@@ -304,18 +362,33 @@ def _line_containing(section: list[str], keywords: tuple[str, ...]) -> str | Non
 
 # --- Work experience -------------------------------------------------------
 def _parse_work(section: list[str]) -> list[WorkExperience]:
+    """Assemble work-experience entries from the WORK EXPERIENCE section.
+
+    Each entry is anchored on a line that carries a **date range** — the reliable
+    signal of a job header (e.g. ``"Software Engineer, Acme  Jan 2020 - Present"``).
+    Lines without a date are wrapped description/bullet prose (or a continuation
+    of the title) and must NOT each become their own entry: doing so exploded a
+    multi-line job description into a dozen bogus "positions" (one per wrapped
+    line). Such lines are skipped, except that a *date-only* header (its text
+    empty once the dates are stripped) borrows the nearest preceding unused line
+    as its title, covering resumes that place the role on the line above the dates.
+    """
     entries: list[WorkExperience] = []
+    # Most recent non-date line, kept only to title a following date-only header.
+    prev_line: str | None = None
     for line in section:
         date_range = _DATE_RANGE.search(line)
-        start = end = None
-        position = line
-        if date_range is not None:
-            start = _to_iso(date_range.group("start"))
-            end = _to_iso(date_range.group("end"))
-            position = _DATE_RANGE.sub("", line).strip(" \t-–—,")
-        # Treat a line with a date range, or a plain title-ish line, as an entry.
-        if date_range is None and (not position or len(position) > _MAX_ITEM_LEN):
+        if date_range is None:
+            # Description / continuation prose — never an entry on its own.
+            stripped = line.strip()
+            prev_line = stripped or prev_line
             continue
+        start = _to_iso(date_range.group("start"))
+        end = _to_iso(date_range.group("end"))
+        position = _DATE_RANGE.sub("", line).strip(" \t-–—,")
+        if not position and prev_line:
+            position = prev_line  # role sat on the line above the dates
+        prev_line = None
         entries.append(
             WorkExperience(
                 position=_clip(position) or None,

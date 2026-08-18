@@ -1,7 +1,10 @@
 import re
+from datetime import UTC, datetime
 from uuid import UUID
 
 from beanie.operators import Or, RegEx
+
+from app.core.blob import delete_avatar_blob, replace_avatar_blob
 
 from .companies_models import Company
 from .companies_schemas import CompanyCreate, CompanyPatch
@@ -41,6 +44,29 @@ async def update_company(company: Company, data: CompanyPatch) -> Company:
     changes = data.model_dump(exclude_unset=True)
     for field, value in changes.items():
         setattr(company, field, value)
+    await company.save()
+    return company
+
+
+async def set_company_avatar(company: Company, *, extension: str, data: bytes) -> Company:
+    """Upload a new avatar image and store its Blob URL on the company."""
+    company.avatar = await replace_avatar_blob(
+        prefix="companies",
+        entity_id=company.id,
+        extension=extension,
+        data=data,
+        previous_url=company.avatar,
+    )
+    company.updated_at = datetime.now(UTC).isoformat()
+    await company.save()
+    return company
+
+
+async def clear_company_avatar(company: Company) -> Company:
+    """Remove the company's avatar, deleting the stored Blob best-effort."""
+    await delete_avatar_blob(company.avatar)
+    company.avatar = None
+    company.updated_at = datetime.now(UTC).isoformat()
     await company.save()
     return company
 

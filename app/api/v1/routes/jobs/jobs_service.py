@@ -62,6 +62,29 @@ async def update_job(job: Job, data: JobPatch) -> Job:
     return job
 
 
+async def count_job_referrals(job_id: UUID, workspace_id: UUID) -> int:
+    # How many referral records point at this job. Referrals live in
+    # `recommended_jobs`: a row with a non-null `status` means an officer has
+    # referred an applicant to this job and advanced it through the referral
+    # lifecycle (see recommended_jobs preserve logic). Such a job is "in use" and
+    # must not be deleted, or that referral history would be orphaned onto a
+    # non-existent job. Rows with `status is None` are fresh, auto-generated
+    # recommendations (re-pruned on regeneration) and are excluded on purpose.
+    # Scoped to the workspace to match the job's tenant.
+    #
+    # Imported lazily: a module-level import pulls in the recommended_jobs package
+    # during startup and closes an import cycle back through app.matching.
+    from beanie.operators import NE
+
+    from app.api.v1.routes.recommended_jobs.recommended_jobs_models import RecommendedJob
+
+    return await RecommendedJob.find(
+        RecommendedJob.job_id == job_id,
+        RecommendedJob.workspace_id == workspace_id,
+        NE(RecommendedJob.status, None),
+    ).count()
+
+
 async def delete_job(job: Job) -> bool:
     result = await job.delete()
     return result is not None and result.acknowledged

@@ -4,7 +4,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..jobs.jobs_models import JobStatus
-from .recommended_jobs_models import RecommendationScores, RecommendedJobStatus
+from .recommended_jobs_models import RecommendationScores, RecommendedJobStatus, SkillMatch
 
 
 class RecommendedJobCompany(BaseModel):
@@ -55,6 +55,7 @@ class RecommendedJobJob(BaseModel):
     # fetch. `sex` is emitted as its plain string value.
     skills_required: list[str] = Field(default_factory=list)
     experience_required: str | None = None
+    experience_preferred: str | None = None
     minimum_education_attainment: list[str] = Field(default_factory=list)
     course_program: str | None = None
     age_range: str | None = None
@@ -80,13 +81,15 @@ class RecommendedJobBase(BaseModel):
     embedded_applicant: list[float] = Field(default_factory=list)
     embedded_job: list[float] = Field(default_factory=list)
     key_matched: list[str] = Field(default_factory=list)
+    skill_matches: list[SkillMatch] = Field(default_factory=list)
     assessed_by: UUID
     workspace_id: UUID
     date_registered: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+    referred_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
-    @field_validator("date_registered", "created_at", "updated_at", mode="before")
+    @field_validator("date_registered", "created_at", "updated_at", "referred_at", mode="before")
     @classmethod
     def _to_isoformat(cls, value: object) -> object:
         if isinstance(value, datetime):
@@ -121,6 +124,9 @@ class RecommendedJobPatch(BaseModel):
     embedded_job: list[float] | None = None
     key_matched: list[str] | None = None
     assessed_by: UUID | None = None
+    # Set by the client when it advances a recommendation to `referred`, stamping
+    # the referral time. Only applied when present (the patch uses exclude_unset).
+    referred_at: str | None = None
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 

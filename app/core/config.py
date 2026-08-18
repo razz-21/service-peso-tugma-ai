@@ -22,19 +22,37 @@ class Settings(BaseSettings):
     # Hosted embedding inference endpoint. The job-matching pipeline no longer
     # loads sentence-transformers locally (torch is far too large for serverless
     # bundles); it calls this endpoint instead, which must serve the paper's
-    # model `sentence-transformers/all-MiniLM-L12-v2` so the produced vectors —
+    # model `sentence-transformers/all-MiniLM-L6-v2` so the produced vectors —
     # and therefore the calibrated cosine bands in matching/scoring.py — stay
     # identical. Defaults to the Hugging Face Inference API for that model.
     EMBEDDING_API_URL: str = (
         "https://router.huggingface.co/hf-inference/models/"
-        "sentence-transformers/all-MiniLM-L12-v2/pipeline/feature-extraction"
+        "sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction"
     )
     # Bearer token for the embedding endpoint (HF token by default). Required in
     # practice — the public HF Inference API rejects unauthenticated requests.
     EMBEDDING_API_TOKEN: str = ""
     EMBEDDING_API_TIMEOUT: float = 30.0
 
+    # Requirement tiering (see matching/scoring.tiered_score). A criterion splits
+    # its items into a mandatory (must-have) and a preferred (nice-to-have) tier.
+    # `REQUIREMENT_BONUS_CAP` is the most a fully-satisfied preferred tier can lift
+    # a criterion whose mandatory tier is met (0.80 → 1.00 at cap 0.20); preferred
+    # items can never compensate for a missing mandatory one.
+    REQUIREMENT_BONUS_CAP: float = 0.20
+    # Hard-gate mode: when True, a job is excluded from recommendations entirely if
+    # the applicant fails any mandatory requirement (mandatory coverage < 1.0),
+    # alongside the existing primary-requirement gates. Default False applies the
+    # soft-penalty formula instead (a missing must-have caps the criterion < 0.80).
+    GATE_ON_MANDATORY: bool = False
+
     CORS_ORIGINS: str = "http://localhost:3000"
+
+    # Vercel Blob read/write token. The `vercel_blob` library reads this from
+    # `os.environ`, but pydantic-settings parses `.env` into `settings` only
+    # (not the process environment), so it's passed explicitly to Blob calls via
+    # `app.core.blob.blob_options`. Leave blank to fall back to the env var.
+    BLOB_READ_WRITE_TOKEN: str = ""
 
     MONGODB_USERNAME: str = "username"
     MONGODB_PASSWORD: str = "password"

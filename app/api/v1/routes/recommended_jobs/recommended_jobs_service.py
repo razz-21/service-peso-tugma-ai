@@ -1,10 +1,12 @@
+import hashlib
 from datetime import UTC, datetime
 from uuid import UUID
 
-from beanie.operators import In
+from beanie.operators import NE, Eq, In
 
 from app.api.v1.routes.applicants.applicants_models import Applicant
 from app.api.v1.routes.workspaces.workspaces_models import Workspace
+from app.core.config import settings
 from app.matching.embeddings import embed, embed_batch
 from app.matching.preprocessing import strip_degree_framing
 from app.matching.primary_requirements import eligibility_matches, meets_primary_requirements
@@ -19,13 +21,17 @@ from app.matching.profile import (
 from app.matching.scoring import (
     MatchWeights,
     ScoreBreakdown,
+    classify_skill_matches,
     combined_score,
     cosine_similarity,
+    education_mandatory_met,
     education_match,
+    experience_mandatory_met,
     experience_match,
     experience_requirement_terms,
     location_match,
     parse_required_years,
+    skills_mandatory_covered,
     skills_match,
 )
 
@@ -35,6 +41,7 @@ from .recommended_jobs_models import (
     RecommendationScores,
     RecommendedJob,
     RecommendedJobStatus,
+    SkillMatch,
 )
 from .recommended_jobs_schemas import RecommendedJobCreate, RecommendedJobPatch
 
@@ -98,6 +105,7 @@ async def list_recommended_jobs(
     status: RecommendedJobStatus | None = None,
     is_relevant: bool | None = None,
     assessed_by: UUID | None = None,
+    referred: bool | None = None,
 ) -> tuple[list[RecommendedJob], int]:
     query = RecommendedJob.find(RecommendedJob.workspace_id == workspace_id)
     if job_id is not None:
@@ -106,6 +114,15 @@ async def list_recommended_jobs(
         query = query.find(RecommendedJob.applicant_id == applicant_id)
     if status is not None:
         query = query.find(RecommendedJob.status == status)
+    # Referral split: `referred=True` returns only rows an officer has acted on
+    # (a lifecycle status is set), `referred=False` only the untouched AI
+    # recommendations (status is null). Lets the client fetch the "Recommended"
+    # list and the "Referred" list as two disjoint server-side queries instead of
+    # slicing one combined response by status on the frontend.
+    if referred is True:
+        query = query.find(NE(RecommendedJob.status, None))
+    elif referred is False:
+        query = query.find(Eq(RecommendedJob.status, None))
     if is_relevant is not None:
         query = query.find(RecommendedJob.is_relevant == is_relevant)
     if assessed_by is not None:
@@ -117,8 +134,9 @@ async def list_recommended_jobs(
 
 # Referral-lifecycle statuses in which the applicant still occupies one of the
 # job's vacancies. Moving *into* one of these consumes a vacancy; moving *out*
-# of them (to withdrawn / not_hired, or back to unassessed) releases it. `hired`
-# keeps the seat consumed — the position stays filled.
+# of them (to withdrawn / not_hired / resigned, or back to unassessed) releases
+# it. `hired` keeps the seat consumed — the position stays filled until the
+# applicant later resigns, which frees it again.
 _VACANCY_HOLDING_STATUSES = frozenset(
     {
         RecommendedJobStatus.REFERRED,
@@ -126,6 +144,42 @@ _VACANCY_HOLDING_STATUSES = frozenset(
         RecommendedJobStatus.HIRED,
     }
 )
+
+
+# Terminal lifecycle statuses: once a referral reaches one of these the outcome
+# is final and the status can no longer change. `resigned` is additionally
+# reachable only from `hired` (see `status_transition_error`).
+_TERMINAL_STATUSES = frozenset(
+    {
+        RecommendedJobStatus.WITHDRAWN,
+        RecommendedJobStatus.NOT_HIRED,
+        RecommendedJobStatus.RESIGNED,
+    }
+)
+
+
+def status_transition_error(
+    previous: RecommendedJobStatus | None,
+    new: RecommendedJobStatus,
+) -> str | None:
+    """A human-readable reason the status transition is disallowed, else None.
+
+    Enforces the referral lifecycle server-side (the UI gates the same rules):
+
+    * A terminal status (withdrawn / not_hired / resigned) is final — no further
+      change is permitted.
+    * `resigned` is reachable only from `hired` — an applicant can't resign a
+      position they were never placed in.
+
+    Re-applying the current status is a no-op and always allowed.
+    """
+    if previous == new:
+        return None
+    if previous in _TERMINAL_STATUSES:
+        return f"This referral is {previous.value.replace('_', ' ')} and can no longer be updated"
+    if new == RecommendedJobStatus.RESIGNED and previous != RecommendedJobStatus.HIRED:
+        return "An applicant can only be marked resigned after being hired"
+    return None
 
 
 def _holds_vacancy(status: RecommendedJobStatus | None) -> bool:
@@ -207,15 +261,24 @@ def _weights_for(workspace: Workspace) -> MatchWeights:
     )
 
 
-async def _ensure_job_embeddings(jobs: list[Job]) -> None:
-    # Populate and persist the cached `Job.embedding` for any job missing one, in
-    # a single batched encode, so repeat runs reuse the stored vectors.
-    missing = [job for job in jobs if not job.embedding]
-    if not missing:
+async def _refresh_job_embeddings(jobs: list[Job]) -> None:
+    # Keep each job's cached `Job.embedding` in sync with its *current* text. A job
+    # is re-embedded when it has no vector yet, or when its text changed since the
+    # vector was computed (an officer edited the requirements) — detected by
+    # hashing the text and comparing to the stored `embedding_source`. Unchanged
+    # jobs are skipped, so we never re-encode or re-save a job needlessly; the
+    # stale ones are re-encoded together in a single batched call.
+    stale: list[tuple[Job, str]] = []  # (job, current signature)
+    for job in jobs:
+        signature = hashlib.sha256(job_to_text(job).encode("utf-8")).hexdigest()
+        if not job.embedding or job.embedding_source != signature:
+            stale.append((job, signature))
+    if not stale:
         return
-    vectors = embed_batch([job_to_text(job) for job in missing])
-    for job, vector in zip(missing, vectors, strict=True):
+    vectors = embed_batch([job_to_text(job) for job, _ in stale])
+    for (job, signature), vector in zip(stale, vectors, strict=True):
         job.embedding = vector
+        job.embedding_source = signature
         await job.save()
 
 
@@ -231,9 +294,11 @@ async def generate_recommendations(
     rule-based skills/experience/education/location) with the workspace's weights,
     ranks by the combined MatchScore, and stores the Top-K as RecommendedJob rows.
     Regenerating replaces only the applicant's *unreferred* recommendations: rows
-    the applicant has already been referred to (status set) are preserved, and
-    their jobs are excluded from the fresh Top-K so they are never duplicated.
-    Returns every current recommendation (preserved + fresh) in rank order.
+    the applicant has already been referred to (status set) are preserved in the
+    database (their referral history/state survives), and their jobs are excluded
+    from the fresh Top-K so they are never re-recommended. Returns only the fresh
+    *unreferred* Top-K in rank order — already-referred jobs are intentionally left
+    out, so the caller's Recommended list never contains a job under referral.
     """
     workspace_id = workspace.id
     weights = _weights_for(workspace)
@@ -291,13 +356,14 @@ async def generate_recommendations(
         if job.id not in preserved_job_ids and meets_primary_requirements(applicant, job)
     ]
     if not jobs:
-        # No fresh candidates: clear the stale (unreferred) rows and return the
-        # preserved referrals in rank order.
+        # No fresh candidates: clear the stale (unreferred) rows. The preserved
+        # referrals stay in the database but are not part of the Recommended list,
+        # so nothing fresh is returned.
         if stale_ids:
             await RecommendedJob.find(In(RecommendedJob.id, stale_ids)).delete()
-        return sorted(preserved, key=lambda rec: rec.score, reverse=True)
+        return []
 
-    await _ensure_job_embeddings(jobs)
+    await _refresh_job_embeddings(jobs)
 
     # Embed each job's qualitative experience requirement (field/role wording) in
     # one batch, so the per-job loop can cosine-compare it to the applicant's
@@ -316,6 +382,22 @@ async def generate_recommendations(
     qual_vectors = embed_batch([job_qual_terms[job.id] or "" for job in qual_jobs])
     job_qual_vec = {job.id: vec for job, vec in zip(qual_jobs, qual_vectors, strict=True)}
 
+    # Same treatment for each job's *preferred* experience requirement, embedded in
+    # its own batch so the per-job loop can score the nice-to-have tier's field/role
+    # wording against the applicant without re-encoding.
+    job_pref_qual_raw = {
+        job.id: experience_requirement_terms(job.experience_preferred) for job in jobs
+    }
+    job_pref_qual_terms = {
+        job_id: (strip_degree_framing(raw) or None) if raw else None
+        for job_id, raw in job_pref_qual_raw.items()
+    }
+    pref_qual_jobs = [job for job in jobs if job_pref_qual_terms[job.id]]
+    pref_qual_vectors = embed_batch([job_pref_qual_terms[job.id] or "" for job in pref_qual_jobs])
+    job_pref_qual_vec = {
+        job.id: vec for job, vec in zip(pref_qual_jobs, pref_qual_vectors, strict=True)
+    }
+
     # Embed each job's preferred course/program (field-of-study wording) in one
     # batch, so the per-job loop can cosine-compare it to the applicant's course
     # for the education dimension without re-encoding. Degree framing is stripped
@@ -326,52 +408,101 @@ async def generate_recommendations(
     course_vectors = embed_batch([job_course_terms[job.id] for job in course_jobs])
     job_course_vec = {job.id: vec for job, vec in zip(course_jobs, course_vectors, strict=True)}
 
-    # Embed the unique required skills across all candidate jobs once, so the
-    # per-job loop can cosine-match each against the applicant's skills (for the
-    # semantic skills score) without re-encoding. Only needed when the applicant
-    # lists skills; otherwise the skills match falls back to exact tokens.
+    # Embed the unique required *and preferred* skills across all candidate jobs
+    # once, so the per-job loop can cosine-match each against the applicant's
+    # skills (for the semantic skills score) without re-encoding. Preferred skills
+    # are embedded too so the nice-to-have tier gets the same semantic matching.
+    # Only needed when the applicant lists skills; otherwise the skills match
+    # falls back to exact tokens.
     required_skill_vecs: dict[str, list[float]] = {}
     if applicant_skill_vecs:
         unique_required = sorted(
-            {skill.strip() for job in jobs for skill in job.skills_required if skill.strip()}
+            {
+                skill.strip()
+                for job in jobs
+                for skill in (*job.skills_required, *job.preferred_skills)
+                if skill.strip()
+            }
         )
         if unique_required:
             skill_vectors = embed_batch(unique_required)
             required_skill_vecs = dict(zip(unique_required, skill_vectors, strict=True))
 
-    scored: list[tuple[Job, RecommendationScores, int, list[str]]] = []
+    scored: list[tuple[Job, RecommendationScores, int, list[str], list[SkillMatch]]] = []
     for job in jobs:
         semantic = cosine_similarity(applicant_vec, job.embedding)
         # Best cosine of each required skill against the applicant's skills, for
         # the semantic (MiniLM) skills match. None when the applicant lists no
         # skills — skills_match then falls back to exact-token matching.
         skill_similarities: dict[str, float] | None = None
+        # Best-matching applicant skill (argmax) per required skill, so the
+        # compare modal can show which skill covers each requirement and how
+        # closely (e.g. "Excel · via Google Sheets").
+        skill_sources: dict[str, tuple[str | None, float]] = {}
         if applicant_skill_vecs and required_skill_vecs:
             skill_similarities = {}
-            for skill in job.skills_required:
+            # Both tiers are matched semantically against the applicant's skills.
+            for skill in (*job.skills_required, *job.preferred_skills):
                 key = skill.strip()
                 required_vec = required_skill_vecs.get(key)
                 if required_vec is None:
                     continue
-                skill_similarities[key] = max(
-                    (cosine_similarity(required_vec, av) for av in applicant_skill_vecs),
-                    default=0.0,
-                )
+                best_name: str | None = None
+                best_cosine = 0.0
+                for name, av in zip(applicant_skill_names, applicant_skill_vecs, strict=True):
+                    cosine = cosine_similarity(required_vec, av)
+                    if cosine > best_cosine:
+                        best_cosine = cosine
+                        best_name = name
+                skill_similarities[key] = best_cosine
+                skill_sources[key] = (best_name, best_cosine)
         skills, matched_skills = skills_match(
-            applicant.technical_skills, job.skills_required, skill_similarities
+            applicant.technical_skills,
+            job.skills_required,
+            skill_similarities,
+            job.preferred_skills,
+            bonus_cap=settings.REQUIREMENT_BONUS_CAP,
         )
-        qualitative_similarity: float | None = None
+        skill_matches = [
+            SkillMatch(
+                required=match.required,
+                applicant=match.applicant,
+                similarity=round(match.similarity * 100),
+                state=match.state,
+                tier=match.tier,
+            )
+            for match in classify_skill_matches(
+                applicant.technical_skills,
+                job.skills_required,
+                skill_sources or None,
+                job.preferred_skills,
+            )
+        ]
+        required_similarity: float | None = None
         if job_qual_terms[job.id] is not None:
             qual_vec = job_qual_vec.get(job.id)
-            qualitative_similarity = (
+            required_similarity = (
                 cosine_similarity(applicant_experience_vec, qual_vec)
                 if applicant_experience_vec is not None and qual_vec is not None
                 else 0.0
             )
+        preferred_similarity: float | None = None
+        if job_pref_qual_terms[job.id] is not None:
+            pref_qual_vec = job_pref_qual_vec.get(job.id)
+            preferred_similarity = (
+                cosine_similarity(applicant_experience_vec, pref_qual_vec)
+                if applicant_experience_vec is not None and pref_qual_vec is not None
+                else 0.0
+            )
+        required_years = parse_required_years(job.experience_required)
+        preferred_years = parse_required_years(job.experience_preferred)
         experience, experience_reason = experience_match(
             applicant_years,
-            parse_required_years(job.experience_required),
-            qualitative_similarity,
+            required_years,
+            required_similarity,
+            preferred_years,
+            preferred_similarity,
+            bonus_cap=settings.REQUIREMENT_BONUS_CAP,
         )
         course_similarity: float | None = None
         if job_course_terms[job.id]:
@@ -382,8 +513,25 @@ async def generate_recommendations(
                 else 0.0
             )
         education, education_reason = education_match(
-            highest_education, job.minimum_education_attainment, course_similarity
+            highest_education,
+            job.minimum_education_attainment,
+            course_similarity,
         )
+        # Optional hard-gate: when GATE_ON_MANDATORY is enabled, exclude the job
+        # entirely if the applicant fails any mandatory (must-have) requirement,
+        # alongside the primary-requirement gates applied before scoring. Preferred
+        # tiers never gate. Off by default — the soft penalty (a missing must-have
+        # caps the criterion below 1 - bonus_cap) applies instead.
+        if settings.GATE_ON_MANDATORY and not (
+            skills_mandatory_covered(
+                applicant.technical_skills, job.skills_required, skill_similarities
+            )
+            and education_mandatory_met(
+                highest_education, job.minimum_education_attainment, course_similarity
+            )
+            and experience_mandatory_met(applicant_years, required_years, required_similarity)
+        ):
+            continue
         location, location_reason = location_match(applicant.preferred_work_location, job.location)
         breakdown = ScoreBreakdown(
             semantic_similarity=semantic,
@@ -404,7 +552,7 @@ async def generate_recommendations(
             educational_background=_to_pct(education),
             location_preference=_to_pct(location),
         )
-        scored.append((job, stored_scores, _to_pct(final), key_matched))
+        scored.append((job, stored_scores, _to_pct(final), key_matched, skill_matches))
 
     scored.sort(key=lambda item: item[2], reverse=True)
     top = scored[:top_k]
@@ -415,7 +563,7 @@ async def generate_recommendations(
         await RecommendedJob.find(In(RecommendedJob.id, stale_ids)).delete()
 
     results: list[RecommendedJob] = []
-    for job, stored_scores, final_pct, key_matched in top:
+    for job, stored_scores, final_pct, key_matched, skill_matches in top:
         rec = RecommendedJob(
             job_id=job.id,
             applicant_id=applicant.id,
@@ -427,12 +575,14 @@ async def generate_recommendations(
             embedded_applicant=applicant_vec,
             embedded_job=job.embedding,
             key_matched=key_matched,
+            skill_matches=skill_matches,
             assessed_by=assessed_by,
             workspace_id=workspace_id,
         )
         await rec.insert()
         results.append(rec)
 
-    # Return every current recommendation — preserved referrals plus the fresh
-    # Top-K — in rank order, so the client reflects the full, deduplicated set.
-    return sorted([*preserved, *results], key=lambda rec: rec.score, reverse=True)
+    # Return only the fresh, unreferred Top-K in rank order. The preserved
+    # referrals remain persisted (and their jobs were excluded above) but are
+    # deliberately omitted here, so the Recommended list holds no referred job.
+    return sorted(results, key=lambda rec: rec.score, reverse=True)

@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from .applicants_models import (
     Address,
+    ApplicantStatus,
     EducationalBackground,
     Eligibility,
     PreferredOccupationIndustry,
@@ -15,10 +16,54 @@ from .applicants_models import (
 
 NAME_MAX = 100
 
+MIN_WORKING_AGE = 1
+MAX_REALISTIC_AGE = 120
+
 
 def _to_isoformat(value: object) -> object:
     if isinstance(value, datetime | date):
         return value.isoformat()
+    return value
+
+
+def _validate_date_of_birth(value: object) -> object:
+    """Shared DOB validator: rejects future dates, under-age, and unrealistic ages.
+
+    Runs *after* ``_to_isoformat`` (mode='after'), so ``value`` is always an ISO
+    string, a ``date``/``datetime``, or ``None`` at this point.
+    """
+    if value is None:
+        return value
+
+    # Parse from ISO string produced by _to_isoformat, or accept date/datetime directly.
+    if isinstance(value, str):
+        try:
+            dob = date.fromisoformat(value[:10])  # strip time component if present
+        except ValueError:
+            raise ValueError("Invalid date format. Use YYYY-MM-DD.")
+    elif isinstance(value, datetime):
+        dob = value.date()
+    elif isinstance(value, date):
+        dob = value
+    else:
+        raise ValueError("Invalid date value.")
+
+    today = datetime.now(UTC).date()
+
+    if dob > today:
+        raise ValueError("Date of birth cannot be in the future.")
+
+    # Compute age in whole years.
+    age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+
+    if age < MIN_WORKING_AGE:
+        raise ValueError(
+            f"Applicant must be at least {MIN_WORKING_AGE} years old."
+        )
+
+    if age > MAX_REALISTIC_AGE:
+        raise ValueError("Date of birth appears unrealistic.")
+
     return value
 
 
@@ -42,6 +87,7 @@ class ApplicantBase(BaseModel):
     secondary_mobile_number: str | None = None
     email_address: EmailStr | None = None
     employment_status: str | None = None
+    status: ApplicantStatus = ApplicantStatus.ACTIVE
     preferred_occupation_industry: list[PreferredOccupationIndustry] = Field(default_factory=list)
     preferred_work_location: list[str] = Field(default_factory=list)
     salary_expectation: str | None = None
@@ -78,6 +124,7 @@ class ApplicantCreate(BaseModel):
     secondary_mobile_number: str | None = None
     email_address: EmailStr | None = None
     employment_status: str | None = None
+    status: ApplicantStatus = ApplicantStatus.ACTIVE
     preferred_occupation_industry: list[PreferredOccupationIndustry] = Field(default_factory=list)
     preferred_work_location: list[str] = Field(default_factory=list)
     salary_expectation: str | None = None
@@ -91,6 +138,11 @@ class ApplicantCreate(BaseModel):
     @classmethod
     def _coerce_isoformat(cls, value: object) -> object:
         return _to_isoformat(value)
+
+    @field_validator("date_of_birth", mode="after")
+    @classmethod
+    def _validate_dob(cls, value: object) -> object:
+        return _validate_date_of_birth(value)
 
 
 class ApplicantPatch(BaseModel):
@@ -110,6 +162,7 @@ class ApplicantPatch(BaseModel):
     secondary_mobile_number: str | None = None
     email_address: EmailStr | None = None
     employment_status: str | None = None
+    status: ApplicantStatus | None = None
     preferred_occupation_industry: list[PreferredOccupationIndustry] | None = None
     preferred_work_location: list[str] | None = None
     salary_expectation: str | None = None
@@ -123,6 +176,11 @@ class ApplicantPatch(BaseModel):
     @classmethod
     def _coerce_isoformat(cls, value: object) -> object:
         return _to_isoformat(value)
+
+    @field_validator("date_of_birth", mode="after")
+    @classmethod
+    def _validate_dob(cls, value: object) -> object:
+        return _validate_date_of_birth(value)
 
 
 class ApplicantFileRead(BaseModel):

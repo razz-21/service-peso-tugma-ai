@@ -1,4 +1,5 @@
 import re
+from datetime import UTC, datetime
 from uuid import UUID
 
 from beanie.operators import Or, RegEx
@@ -7,6 +8,7 @@ from app.api.v1.routes.applicants.applicants_models import Applicant
 from app.api.v1.routes.companies.companies_models import Company
 from app.api.v1.routes.jobs.jobs_models import Job
 from app.api.v1.routes.recommended_jobs.recommended_jobs_models import RecommendedJob
+from app.core.blob import delete_avatar_blob, replace_avatar_blob
 
 from .workspaces_models import Workspace
 from .workspaces_schemas import WorkspaceCreate, WorkspacePatch, WorkspaceStatistics
@@ -40,6 +42,29 @@ async def update_workspace(workspace: Workspace, data: WorkspacePatch) -> Worksp
     changes = data.model_dump(exclude_unset=True)
     for field, value in changes.items():
         setattr(workspace, field, value)
+    await workspace.save()
+    return workspace
+
+
+async def set_workspace_avatar(workspace: Workspace, *, extension: str, data: bytes) -> Workspace:
+    """Upload a new avatar image and store its Blob URL on the workspace."""
+    workspace.avatar = await replace_avatar_blob(
+        prefix="workspaces",
+        entity_id=workspace.id,
+        extension=extension,
+        data=data,
+        previous_url=workspace.avatar,
+    )
+    workspace.updated_at = datetime.now(UTC).isoformat()
+    await workspace.save()
+    return workspace
+
+
+async def clear_workspace_avatar(workspace: Workspace) -> Workspace:
+    """Remove the workspace's avatar, deleting the stored Blob best-effort."""
+    await delete_avatar_blob(workspace.avatar)
+    workspace.avatar = None
+    workspace.updated_at = datetime.now(UTC).isoformat()
     await workspace.save()
     return workspace
 

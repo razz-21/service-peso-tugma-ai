@@ -2,9 +2,11 @@ from typing import Annotated
 from uuid import UUID
 
 import jwt
-from fastapi import APIRouter, Cookie, Depends, Form, HTTPException, Response, status
+from fastapi import APIRouter, Cookie, Depends, Form, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 
+from app.api.v1.routes.audit_logs import audit_logs_service
+from app.api.v1.routes.audit_logs.audit_logs_models import AuditEntity, AuditTone
 from app.api.v1.routes.users import users_service as user_service
 from app.api.v1.routes.users.users_models import UserStatus
 from app.api.v1.routes.users.users_schemas import UserCreate, UserRead
@@ -14,6 +16,13 @@ from . import auth_service
 from .auth_schemas import TokenPayload
 
 router = APIRouter()
+
+
+def _request_meta(request: Request) -> list[str]:
+    """Client facts (IP, user agent) attached to a security audit entry."""
+    ip = request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("user-agent", "unknown")
+    return [ip, user_agent]
 
 
 @router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
@@ -29,6 +38,7 @@ async def register(data: UserCreate) -> UserRead:
 
 @router.post("/login", response_model=UserRead)
 async def login(
+    request: Request,
     response: Response,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
     remember_me: Annotated[bool, Form()] = False,
@@ -46,6 +56,17 @@ async def login(
         )
     auth_service.set_auth_cookies(
         response, auth_service.issue_tokens(str(user.id)), remember=remember_me
+    )
+    await audit_logs_service.record_audit(
+        workspace_id=user.workspace_id,
+        entity=AuditEntity.SECURITY,
+        entity_label="Security",
+        actor=user.fullname,
+        action="signed in",
+        icon="shield",
+        icon_tone=AuditTone.GREY,
+        chip_tone=AuditTone.GREY,
+        meta=_request_meta(request),
     )
     return await user_service.build_user_read(user)
 

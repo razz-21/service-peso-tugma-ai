@@ -79,8 +79,7 @@ class ApplicantReferredRow(BaseModel):
 
     Applicant attributes (address, skills, demographics, education) are snapshots
     resolved from the applicant record; `position`/`company_referred` come from
-    the referred job. `city_province_address` is intentionally always blank (a
-    placeholder column requested for the export layout).
+    the referred job. `job_location` is the referred job's work location.
     """
 
     name: str | None = None
@@ -96,7 +95,7 @@ class ApplicantReferredRow(BaseModel):
     date_referred: str  # ISO timestamp; the client renders the date
     contact_number: str | None = None
     company_referred: str | None = None
-    city_province_address: str | None = None
+    job_location: str | None = None
 
 
 class ApplicantReferredReport(BaseModel):
@@ -263,3 +262,53 @@ class EstablishmentsRegisteredReport(BaseModel):
     with_active_jobs: int
     by_type: list[LabeledCount]
     rows: list[EstablishmentRow]
+
+
+# --- Accomplishment --------------------------------------------------------
+
+
+class PesoAccomplishmentReport(BaseModel):
+    """The "Accomplishment Report": the roll-up of all facilitation services for
+    the selected window.
+
+    A single roll-up of the office's headline indicators, all scoped to
+    `[start_date, end_date]`. `placement_rate` is `applicants_placed /
+    applicants_referred` as a percentage (0.0 when no referrals). All figures
+    are counts within the window; establishments_engaged is the number of
+    distinct partners that solicited vacancies in the window.
+    """
+
+    start_date: date
+    end_date: date
+    job_seekers_registered: int
+    establishments_engaged: int
+    vacancies_solicited: int
+    applicants_referred: int
+    applicants_placed: int
+    placement_rate: float
+
+
+# --- Referral-to-Placement Funnel ------------------------------------------
+
+
+class ReferralFunnelReport(BaseModel):
+    """The "Referral-to-Placement Funnel": conversion at each stage from referral
+    through to hire, for the selected window.
+
+    Cohort = referrals created in `[start_date, end_date]` (recommendations with a
+    lifecycle status). `interviewed` counts that cohort's referrals that reached
+    the interview stage or beyond (status `interview_scheduled` or `hired`);
+    `hired` counts those with status `hired`. `did_not_convert` is
+    `referred - hired`. The percentages are shares of the referred cohort, except
+    `interviewed_to_hired_pct`, the share of the interviewed who were hired.
+    """
+
+    start_date: date
+    end_date: date
+    referred: int
+    interviewed: int
+    hired: int
+    did_not_convert: int
+    interviewed_pct: float
+    hired_pct: float
+    interviewed_to_hired_pct: float

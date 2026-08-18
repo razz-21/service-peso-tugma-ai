@@ -32,9 +32,11 @@ from .dashboard_schemas import (
 # How far an applicant has progressed, ranked so the most advanced referral wins
 # when they have several. Applicants with no referral fall through to "new".
 _STATUS_PRIORITY = {
-    RecommendedJobStatus.HIRED: 5,
-    RecommendedJobStatus.INTERVIEW_SCHEDULED: 4,
-    RecommendedJobStatus.REFERRED: 3,
+    RecommendedJobStatus.HIRED: 6,
+    RecommendedJobStatus.INTERVIEW_SCHEDULED: 5,
+    RecommendedJobStatus.REFERRED: 4,
+    # Resigned follows a hire, so it ranks above the never-placed terminals.
+    RecommendedJobStatus.RESIGNED: 3,
     RecommendedJobStatus.WITHDRAWN: 2,
     RecommendedJobStatus.NOT_HIRED: 1,
 }
@@ -45,6 +47,7 @@ _STATUS_BADGES = {
     RecommendedJobStatus.REFERRED: ("referred", "Referred"),
     RecommendedJobStatus.WITHDRAWN: ("withdrawn", "Withdrawn"),
     RecommendedJobStatus.NOT_HIRED: ("not_hired", "Not hired"),
+    RecommendedJobStatus.RESIGNED: ("resigned", "Resigned"),
 }
 _NEW_BADGE = ("new", "New")
 
@@ -103,9 +106,9 @@ async def _count_active_jobs(workspace_id: UUID, lo: str, hi: str) -> int:
 
 
 async def _count_hired(workspace_id: UUID, lo: str, hi: str) -> int:
-    # Placements come from recommended_jobs — the live referral/hire lifecycle
-    # (applicant_jobs is unused). There's no dedicated hire timestamp, so
-    # `updated_at` (bumped when the status advances to HIRED) is the hire-event time.
+    # Placements come from recommended_jobs — the live referral/hire lifecycle.
+    # There's no dedicated hire timestamp, so `updated_at` (bumped when the status
+    # advances to HIRED) is the hire-event time.
     return await RecommendedJob.find(
         RecommendedJob.workspace_id == workspace_id,
         RecommendedJob.status == RecommendedJobStatus.HIRED,
@@ -215,10 +218,10 @@ async def get_matching_funnel(
     workspace_id: UUID, start_date: date, end_date: date
 ) -> MatchingFunnel:
     # Cohort = AI recommendations (matches) generated in the window, from
-    # recommended_jobs — the live referral/hire lifecycle (applicant_jobs is
-    # unused). Referred counts the matches that were acted on (given any lifecycle
-    # status); Interviewed/Hired count those whose current status has reached that
-    # stage. Withdrawn/Not-hired are terminal outcomes within the same cohort.
+    # recommended_jobs — the live referral/hire lifecycle. Referred counts the
+    # matches that were acted on (given any lifecycle status); Interviewed/Hired
+    # count those whose current status has reached that stage. Withdrawn/Not-hired
+    # are terminal outcomes within the same cohort.
     start_iso = _day_start_iso(start_date)
     end_iso = _day_start_iso(end_date + timedelta(days=1))
 

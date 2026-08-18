@@ -45,3 +45,5 @@ htmlcov/
 
 # Uploaded applicant files (resumes)
 uploads/
+.vercel
+.env*

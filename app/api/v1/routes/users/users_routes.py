@@ -4,6 +4,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.deps import get_current_user, get_current_workspace_id, require_roles
+from app.api.v1.routes.audit_logs import audit_logs_service
+from app.api.v1.routes.audit_logs.audit_logs_models import AuditEntity, AuditTone
 
 from . import users_service
 from .users_models import User, UserRole
@@ -17,7 +19,7 @@ async def create_user(
     data: UserCreate,
     workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
     # Officers may view members but not invite new ones — super admins and admins can.
-    _: Annotated[User, Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.ADMIN))],
+    current_user: Annotated[User, Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.ADMIN))],
 ) -> UserRead:
     if await users_service.get_user_by_email(data.email):
         raise HTTPException(
@@ -25,6 +27,17 @@ async def create_user(
             detail="Email already registered",
         )
     user = await users_service.create_user(data, workspace_id=workspace_id)
+    await audit_logs_service.record_audit(
+        workspace_id=workspace_id,
+        entity=AuditEntity.SECURITY,
+        entity_label="Security",
+        actor=current_user.fullname,
+        action="added a team member",
+        icon="person_add",
+        icon_tone=AuditTone.GREEN,
+        chip_tone=AuditTone.GREEN,
+        records=[user.fullname],
+    )
     return await users_service.build_user_read(user)
 
 
@@ -68,7 +81,7 @@ async def get_user(user_id: UUID, _: Annotated[User, _manage_users]) -> UserRead
 
 @router.patch("/{user_id}", response_model=UserRead)
 async def update_user(
-    user_id: UUID, data: UserPatch, _: Annotated[User, _manage_users]
+    user_id: UUID, data: UserPatch, current_user: Annotated[User, _manage_users]
 ) -> UserRead:
     user = await users_service.get_user(user_id)
     if user is None:
@@ -84,16 +97,41 @@ async def update_user(
             detail="Email already registered",
         )
 
+    password_changed = data.password is not None
     user = await users_service.update_user(user, data)
+    await audit_logs_service.record_audit(
+        workspace_id=user.workspace_id,
+        entity=AuditEntity.SECURITY,
+        entity_label="Security",
+        actor=current_user.fullname,
+        action="reset a password" if password_changed else "updated a team member",
+        icon="lock_reset" if password_changed else "manage_accounts",
+        icon_tone=AuditTone.AMBER if password_changed else AuditTone.GREEN,
+        chip_tone=AuditTone.AMBER if password_changed else AuditTone.GREEN,
+        records=[user.fullname],
+    )
     return await users_service.build_user_read(user)
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_user(user_id: UUID, _: Annotated[User, _manage_users]) -> None:
+async def delete_user(user_id: UUID, current_user: Annotated[User, _manage_users]) -> None:
     user = await users_service.get_user(user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    user_name = user.fullname
+    user_workspace_id = user.workspace_id
     if not await users_service.delete_user(user):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete user"
         )
+    await audit_logs_service.record_audit(
+        workspace_id=user_workspace_id,
+        entity=AuditEntity.SECURITY,
+        entity_label="Security",
+        actor=current_user.fullname,
+        action="removed a team member",
+        icon="person_remove",
+        icon_tone=AuditTone.RED,
+        chip_tone=AuditTone.RED,
+        records=[user_name],
+    )

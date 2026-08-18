@@ -1,9 +1,13 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
-from app.api.deps import get_current_workspace_id
+from app.api.deps import get_current_user, get_current_workspace_id
+from app.api.v1.routes.audit_logs import audit_logs_service
+from app.api.v1.routes.audit_logs.audit_logs_models import AuditEntity, AuditTone
+from app.api.v1.routes.users.users_models import User
+from app.core.blob import AVATAR_CONTENT_TYPE_EXTENSIONS, AVATAR_MAX_BYTES
 
 from . import companies_service
 from .companies_schemas import (
@@ -20,8 +24,20 @@ router = APIRouter()
 async def create_company(
     data: CompanyCreate,
     workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> CompanyRead:
     company = await companies_service.create_company(data, workspace_id=workspace_id)
+    await audit_logs_service.record_audit(
+        workspace_id=workspace_id,
+        entity=AuditEntity.COMPANY,
+        entity_label="Company",
+        actor=current_user.fullname,
+        action="created a company",
+        icon="apartment",
+        icon_tone=AuditTone.GREEN,
+        chip_tone=AuditTone.GREEN,
+        records=[company.company_name],
+    )
     return CompanyRead.model_validate(company)
 
 
@@ -59,11 +75,92 @@ async def update_company(
     company_id: UUID,
     data: CompanyPatch,
     workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> CompanyRead:
     company = await companies_service.get_company(company_id, workspace_id=workspace_id)
     if company is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
     company = await companies_service.update_company(company, data)
+    await audit_logs_service.record_audit(
+        workspace_id=workspace_id,
+        entity=AuditEntity.COMPANY,
+        entity_label="Company",
+        actor=current_user.fullname,
+        action="updated a company",
+        icon="apartment",
+        icon_tone=AuditTone.GREEN,
+        chip_tone=AuditTone.GREEN,
+        records=[company.company_name],
+    )
+    return CompanyRead.model_validate(company)
+
+
+@router.post("/{company_id}/avatar", response_model=CompanyRead)
+async def upload_company_avatar(
+    company_id: UUID,
+    workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    file: Annotated[UploadFile, File()],
+) -> CompanyRead:
+    # Uploads the image to Vercel Blob and stores its URL on the company. Rejects
+    # unsupported types (415), empty (400), and files over 5 MB (413).
+    company = await companies_service.get_company(company_id, workspace_id=workspace_id)
+    if company is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
+    extension = AVATAR_CONTENT_TYPE_EXTENSIONS.get(file.content_type or "")
+    if extension is None:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Only JPEG, PNG, WebP, or GIF images are supported.",
+        )
+    data = await file.read()
+    if not data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The uploaded image is empty.",
+        )
+    if len(data) > AVATAR_MAX_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Image exceeds the 5 MB limit.",
+        )
+    company = await companies_service.set_company_avatar(company, extension=extension, data=data)
+    await audit_logs_service.record_audit(
+        workspace_id=workspace_id,
+        entity=AuditEntity.COMPANY,
+        entity_label="Company",
+        actor=current_user.fullname,
+        action="updated a company avatar",
+        icon="apartment",
+        icon_tone=AuditTone.GREEN,
+        chip_tone=AuditTone.GREEN,
+        records=[company.company_name],
+    )
+    return CompanyRead.model_validate(company)
+
+
+@router.delete("/{company_id}/avatar", response_model=CompanyRead)
+async def remove_company_avatar(
+    company_id: UUID,
+    workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> CompanyRead:
+    # Clears the avatar URL and removes the stored Blob; a no-op when unset.
+    company = await companies_service.get_company(company_id, workspace_id=workspace_id)
+    if company is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
+    company = await companies_service.clear_company_avatar(company)
+    await audit_logs_service.record_audit(
+        workspace_id=workspace_id,
+        entity=AuditEntity.COMPANY,
+        entity_label="Company",
+        actor=current_user.fullname,
+        action="removed a company avatar",
+        icon="apartment",
+        icon_tone=AuditTone.GREEN,
+        chip_tone=AuditTone.GREEN,
+        records=[company.company_name],
+    )
     return CompanyRead.model_validate(company)
 
 
@@ -71,12 +168,25 @@ async def update_company(
 async def delete_company(
     company_id: UUID,
     workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> None:
     company = await companies_service.get_company(company_id, workspace_id=workspace_id)
     if company is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
+    company_name = company.company_name
     if not await companies_service.delete_company(company):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete company",
         )
+    await audit_logs_service.record_audit(
+        workspace_id=workspace_id,
+        entity=AuditEntity.COMPANY,
+        entity_label="Company",
+        actor=current_user.fullname,
+        action="deleted a company",
+        icon="apartment",
+        icon_tone=AuditTone.RED,
+        chip_tone=AuditTone.RED,
+        records=[company_name],
+    )

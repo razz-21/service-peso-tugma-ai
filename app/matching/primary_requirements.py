@@ -100,12 +100,12 @@ def sex_matches(applicant_sex: str | None, job_sex: str | None) -> bool:
     """Whether the applicant's sex satisfies the job's sex requirement."""
     if job_sex is None:
         return True
-    required = str(job_sex).strip().lower()
+    required = job_sex.strip().lower()
     if required == _BOTH_SEXES:
         return True
     if applicant_sex is None:
         return True
-    provided = str(applicant_sex).strip().lower()
+    provided = applicant_sex.strip().lower()
     if provided == _BOTH_SEXES:
         return True
     return provided == required
@@ -117,8 +117,7 @@ def civil_status_matches(applicant_civil: str | None, allowed: list[str]) -> boo
         return True
     if not applicant_civil:
         return True
-    target = str(applicant_civil).strip().lower()
-    return any(target == str(status).strip().lower() for status in allowed)
+    return applicant_civil.strip().lower() in {s.strip().lower() for s in allowed}
 
 
 def has_open_vacancy(no_of_vacancies: int | None) -> bool:

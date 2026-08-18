@@ -23,6 +23,7 @@ class JobCompany(BaseModel):
     id: UUID
     company_name: str
     company_type: CompanyType
+    avatar: str | None = None
 
 
 class JobBase(BaseModel):
@@ -35,6 +36,10 @@ class JobBase(BaseModel):
     course_program: str | None = None
     experience_required: str | None = None
     skills_required: list[str] = Field(default_factory=list)
+    # Preferred (nice-to-have) requirement tier — see Job model. Defaults keep old
+    # clients and pre-tiering documents working (everything stays mandatory).
+    preferred_skills: list[str] = Field(default_factory=list)
+    experience_preferred: str | None = None
     # Read-side bound is `ge=0`: a job whose vacancies were all consumed by
     # referrals legitimately reads as 0. Creating/patching still requires `ge=1`.
     no_of_vacancies: int = Field(default=1, ge=0, le=VACANCIES_MAX)
@@ -65,6 +70,8 @@ class JobCreate(BaseModel):
     course_program: str | None = None
     experience_required: str | None = None
     skills_required: list[str] = Field(default_factory=list)
+    preferred_skills: list[str] = Field(default_factory=list)
+    experience_preferred: str | None = None
     no_of_vacancies: int = Field(default=1, ge=1, le=VACANCIES_MAX)
     salary_per_month: int | None = Field(default=None, ge=0)
     location: str | None = None
@@ -83,6 +90,8 @@ class JobPatch(BaseModel):
     course_program: str | None = None
     experience_required: str | None = None
     skills_required: list[str] | None = None
+    preferred_skills: list[str] | None = None
+    experience_preferred: str | None = None
     no_of_vacancies: int | None = Field(default=None, ge=1, le=VACANCIES_MAX)
     salary_per_month: int | None = Field(default=None, ge=0)
     location: str | None = None

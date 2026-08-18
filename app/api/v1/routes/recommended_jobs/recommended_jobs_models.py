@@ -13,6 +13,10 @@ class RecommendedJobStatus(StrEnum):
     # NOTE: normalized spelling of the requested "widthdrawn".
     WITHDRAWN = "withdrawn"
     NOT_HIRED = "not_hired"
+    # Reached only from HIRED — the applicant left the position afterwards. Like
+    # WITHDRAWN / NOT_HIRED it is terminal and, being absent from
+    # `_VACANCY_HOLDING_STATUSES`, releases the seat the hire had consumed.
+    RESIGNED = "resigned"
 
 
 class RecommendationScores(BaseModel):
@@ -25,6 +29,28 @@ class RecommendationScores(BaseModel):
     experience: int = Field(default=0, ge=0, le=100)
     educational_background: int = Field(default=0, ge=0, le=100)
     location_preference: int = Field(default=0, ge=0, le=100)
+
+
+class SkillMatch(BaseModel):
+    """How one required skill is covered by the applicant, for the compare modal.
+
+    ``state`` is ``"matched"`` (exact token or a strong semantic match),
+    ``"related"`` (a nearby skill worth surfacing — e.g. "Google Sheets" for a
+    required "Excel"), or ``"missing"``. ``applicant`` names the covering skill
+    (``None`` for an exact match or a genuine miss); ``similarity`` is the best
+    cosine as a 0-100 percentage (100 for an exact token match).
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    required: str
+    applicant: str | None = None
+    similarity: int = Field(default=0, ge=0, le=100)
+    state: str = "missing"
+    # "mandatory" (a required skill) or "preferred" (a nice-to-have). Lets the UI
+    # show "missing (required)" vs. "missing (preferred)". Defaults to "mandatory"
+    # on records written before requirement tiering existed.
+    tier: str = "mandatory"
 
 
 class RecommendedJob(Document):
@@ -62,6 +88,10 @@ class RecommendedJob(Document):
     embedded_applicant: list[float] = Field(default_factory=list)
     embedded_job: list[float] = Field(default_factory=list)
     key_matched: list[str] = Field(default_factory=list)
+    # Per-required-skill coverage detail (matched / related / missing) for the
+    # compare modal. Empty on records written before this field existed — the
+    # frontend then falls back to `key_matched` for skill classification.
+    skill_matches: list[SkillMatch] = Field(default_factory=list)
     # Foreign key to `users` (User.id) — the officer/user who assessed this
     # recommendation.
     assessed_by: UUID
@@ -71,8 +101,13 @@ class RecommendedJob(Document):
     date_registered: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+    # When the applicant was referred to this job. Stamped fresh on creation (a
+    # manual referral is created directly in the `referred` status), and re-stamped
+    # by the client when an AI recommendation is advanced to `referred` via PATCH,
+    # so the Referred jobs panel can sort by the actual referral time.
+    referred_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
-    @field_validator("date_registered", "created_at", "updated_at", mode="before")
+    @field_validator("date_registered", "created_at", "updated_at", "referred_at", mode="before")
     @classmethod
     def _to_isoformat(cls, value: object) -> object:
         # Tolerate documents whose timestamps were stored as BSON datetimes.

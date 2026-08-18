@@ -1,9 +1,11 @@
 import re
+from datetime import UTC, datetime
 from uuid import UUID
 
 from beanie.operators import In, Or, RegEx
 
 from app.api.v1.routes.workspaces.workspaces_models import Workspace
+from app.core.blob import delete_avatar_blob, replace_avatar_blob
 from app.core.security import hash_password, verify_password
 
 from .users_models import User, UserRole
@@ -88,6 +90,29 @@ async def update_user(user: User, data: UserPatch | MePatch) -> User:
         user.password = hash_password(password)
     for field, value in changes.items():
         setattr(user, field, value)
+    await user.save()
+    return user
+
+
+async def set_user_avatar(user: User, *, extension: str, data: bytes) -> User:
+    """Upload a new avatar image and store its Blob URL on the user."""
+    user.avatar = await replace_avatar_blob(
+        prefix="users",
+        entity_id=user.id,
+        extension=extension,
+        data=data,
+        previous_url=user.avatar,
+    )
+    user.updated_at = datetime.now(UTC).isoformat()
+    await user.save()
+    return user
+
+
+async def clear_user_avatar(user: User) -> User:
+    """Remove the user's avatar, deleting the stored Blob best-effort."""
+    await delete_avatar_blob(user.avatar)
+    user.avatar = None
+    user.updated_at = datetime.now(UTC).isoformat()
     await user.save()
     return user
 

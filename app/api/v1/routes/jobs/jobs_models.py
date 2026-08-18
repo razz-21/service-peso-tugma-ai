@@ -27,6 +27,15 @@ class Job(Document):
     course_program: str | None = None
     experience_required: str | None = None
     skills_required: list[str] = Field(default_factory=list)
+    # Requirement tiering (additive, backward-compatible): the fields above are the
+    # mandatory (must-have) tier; these are the preferred (nice-to-have) tier the
+    # scorer treats as a bounded bonus. Empty / None on documents written before
+    # tiering existed, so every existing requirement stays fully mandatory.
+    preferred_skills: list[str] = Field(default_factory=list)
+    # Preferred (nice-to-have) experience — the bonus-only counterpart to
+    # `experience_required`. Free text like the mandatory field; an unmet preferred
+    # experience adds no penalty, a met one contributes a bounded bonus.
+    experience_preferred: str | None = None
     no_of_vacancies: int = 0
     salary_per_month: int | None = None
     # Work location / address of the job. Used by the matching pipeline's
@@ -44,6 +53,11 @@ class Job(Document):
     # Kept off the read/write schemas (JobCreate/JobPatch/JobRead) so it stays an
     # internal cache rather than a client-facing field.
     embedding: list[float] = Field(default_factory=list)
+    # Fingerprint (hash) of the job text that produced `embedding`. The recommender
+    # compares it against the current text on every run and re-embeds when they
+    # differ, so a job whose requirements were edited gets a fresh vector instead
+    # of scoring against a stale cache. Empty until the embedding is first computed.
+    embedding_source: str = Field(default="")
     # Foreign key to `companies` (Company.id). Stored as a UUID reference rather
     # than a Mongo DBRef so it round-trips like any other scalar field.
     company_id: UUID
