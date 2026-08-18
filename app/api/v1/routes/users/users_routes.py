@@ -50,10 +50,11 @@ async def list_users(
     role: Annotated[str, Query()] = None,
     workspace_id: Annotated[UUID | None, Query()] = None,
 ) -> UserList:
-    # Officers can't browse User Management; the only user list they may read is
-    # their own workspace's members. Pin the filter to their workspace so they
-    # can't enumerate users elsewhere (or globally).
-    if current_user.role == UserRole.OFFICER:
+    # Only super admins may browse across workspaces. Everyone else (admins and
+    # officers) is confined to their own workspace — pin the filter server-side so
+    # they can't enumerate users elsewhere (or globally) by omitting/altering the
+    # query param.
+    if current_user.role != UserRole.SUPER_ADMIN:
         workspace_id = current_user.workspace_id
     users, total = await users_service.list_users(
         limit=limit, offset=offset, q=q, role=role, workspace_id=workspace_id
