@@ -1,6 +1,6 @@
 [project]
 name = "service-peso-tugma-ai"
-version = "0.1.0"
+version = "1.0.0"
 description = "FastAPI backend for peso-tugma-ai"
 requires-python = ">=3.12"
 dependencies = [
