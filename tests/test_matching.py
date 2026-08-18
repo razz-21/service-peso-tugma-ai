@@ -242,13 +242,13 @@ def test_experience_requirement_terms_extracts_qualitative_signal() -> None:
 def test_experience_qualitative_low_similarity_is_not_met() -> None:
     # A front-end developer against an engineering requirement: low cosine ->
     # near-zero sub-score (the reported bug — previously always 1.0 / "met").
-    score, reason = experience_match(3.0, None, qualitative_similarity=0.15)
+    score, reason = experience_match(3.0, None, required_similarity=0.15)
     assert score == 0.0
     assert reason is None
 
 
 def test_experience_qualitative_high_similarity_is_met() -> None:
-    score, reason = experience_match(0.0, None, qualitative_similarity=0.60)
+    score, reason = experience_match(0.0, None, required_similarity=0.60)
     assert score == 1.0
     assert reason is None
 
@@ -257,7 +257,7 @@ def test_experience_gates_years_by_field_not_averaged() -> None:
     # Years met (1.0) gated by calibrated qualitative (0.35 -> 0.5): min = 0.5, a
     # "partial", not the 0.75 the old average produced. The field is only
     # partially related, so met years cannot lift it into "Met".
-    score, reason = experience_match(5.0, 3.0, qualitative_similarity=0.35)
+    score, reason = experience_match(5.0, 3.0, required_similarity=0.35)
     assert math.isclose(score, 0.5)
     # Gate hasn't cleared "Met", so no "N+ yrs" chip is surfaced.
     assert reason is None
@@ -268,7 +268,7 @@ def test_experience_met_years_do_not_mask_unrelated_field() -> None:
     # cosine) against a "5 years as a pet salon staff" requirement. Even with the
     # years requirement fully met, the unrelated field gates the score to ~0.0 so
     # the requirement reads "not met" rather than "partial".
-    score, reason = experience_match(8.0, 5.0, qualitative_similarity=0.16)
+    score, reason = experience_match(8.0, 5.0, required_similarity=0.16)
     assert score < 0.4
     assert reason is None
 
@@ -276,7 +276,7 @@ def test_experience_met_years_do_not_mask_unrelated_field() -> None:
 def test_experience_related_field_and_met_years_is_met() -> None:
     # A genuine pet-salon applicant: strong field (0.60 -> 1.0) and met years both
     # clear the gate, so the requirement reads "Met" and surfaces the years chip.
-    score, reason = experience_match(6.0, 5.0, qualitative_similarity=0.60)
+    score, reason = experience_match(6.0, 5.0, required_similarity=0.60)
     assert score == 1.0
     assert reason is not None
 
@@ -547,38 +547,48 @@ def test_classify_skill_matches_tags_tier() -> None:
     assert by_skill["Docker"].tier == "preferred" and by_skill["Docker"].state == "missing"
 
 
-def test_education_preferred_adds_bounded_bonus() -> None:
-    # Mandatory level met (1.0); preferred Master's is one rung above a Bachelor's
-    # → 0.5 preferred coverage → 0.80 + 0.20 * 0.5 = 0.90.
-    score, reason = education_match(
-        "Bachelor's Degree", ["High School"], preferred_education=["Master's Degree"]
-    )
-    assert math.isclose(score, 0.90)
+def test_education_is_plain_mandatory_gate() -> None:
+    # Education has no preferred tier: the score is the plain mandatory level/course
+    # gate. A met level with no course constraint is a full match.
+    score, reason = education_match("Bachelor's Degree", ["High School"])
+    assert math.isclose(score, 1.0)
     assert reason == "Bachelor's Degree"
 
 
-def test_education_preferred_cannot_compensate_missing_mandatory() -> None:
-    # Mandatory Bachelor's unmet (applicant only High School) → capped low; a met
-    # preferred level cannot lift it.
-    score, _ = education_match(
-        "High School", ["Bachelor's Degree"], preferred_education=["High School"]
-    )
-    assert math.isclose(score, 0.0)
+def test_education_unmet_level_is_not_lifted() -> None:
+    # Mandatory Bachelor's unmet: a one-rung-short vocational grad reads "Partial"
+    # (0.5); High School (three rungs short) reads "Not met" (0.0). Nothing lifts
+    # either, since education has no preferred tier.
+    partial, partial_reason = education_match("Vocational / Technical", ["Bachelor's Degree"])
+    assert math.isclose(partial, 0.5)
+    assert partial_reason is None
+    not_met, _ = education_match("High School", ["Bachelor's Degree"])
+    assert math.isclose(not_met, 0.0)
 
 
-def test_education_no_preferred_tier_is_unchanged_behavior() -> None:
-    # Backward compatibility: a met mandatory level with no preferred tier stays 1.0.
-    score, _ = education_match("Bachelor's Degree", ["High School"])
-    assert math.isclose(score, 1.0)
-
-
-def test_experience_preferred_unmet_adds_no_penalty() -> None:
-    # A preferred experience requirement only lifts the score: an unmet one stays
-    # at the base (no penalty), a met one reaches full.
-    unmet, _ = experience_match(1.0, 4.0, is_preferred=True)  # raw ratio 0.25
+def test_experience_preferred_only_adds_no_penalty() -> None:
+    # A job stating *only* a preferred experience (no mandatory tier): the score is
+    # bonus-only, so an unmet preferred stays at the base (no penalty) and a met one
+    # reaches full. Mirrors education's preferred-only behavior.
+    unmet, _ = experience_match(1.0, None, None, 4.0, None)  # preferred ratio 0.25
     assert math.isclose(unmet, 0.85)  # 0.80 + 0.20 * 0.25
-    met, _ = experience_match(5.0, 3.0, is_preferred=True)
+    met, _ = experience_match(5.0, None, None, 3.0, None)
     assert math.isclose(met, 1.0)
+
+
+def test_experience_preferred_lifts_met_mandatory() -> None:
+    # Mandatory met (1.0) with no preferred stays at the base 0.80; a met preferred
+    # tier lifts it toward 1.0, an unmet preferred adds no penalty (stays 0.80).
+    base, _ = experience_match(5.0, 3.0, None, 2.0, None)  # mandatory + met preferred
+    assert math.isclose(base, 1.0)
+    no_penalty, _ = experience_match(5.0, 3.0, None, 10.0, None)  # preferred unmet (0.5)
+    assert math.isclose(no_penalty, 0.90)  # 0.80 + 0.20 * 0.5
+
+
+def test_experience_preferred_cannot_compensate_missing_mandatory() -> None:
+    # Mandatory unmet (ratio 0.25 -> capped 0.20) cannot be lifted by a met preferred.
+    score, _ = experience_match(1.0, 4.0, None, 1.0, None)
+    assert math.isclose(score, 0.20)  # (1 - 0.20) * 0.25
 
 
 def test_experience_mandatory_unchanged_behavior() -> None:
@@ -684,18 +694,18 @@ def test_job_to_text_is_preprocessed() -> None:
         skills_required=["Python", "MongoDB"],
         preferred_skills=["Kubernetes"],
         experience_required="3 years",
+        experience_preferred="5 years as a Data Engineer",
         minimum_education_attainment=["Bachelor's Degree"],
-        preferred_education=["Master's Degree"],
         course_program="BS Computer Science",
     )
     text = job_to_text(job)  # type: ignore[arg-type]
     assert "senior backend engineer" in text
     assert "mongodb" in text
     assert "computer science" in text
-    # Preferred skills/education are folded into the semantic text too, so editing
+    # Preferred skills/experience are folded into the semantic text too, so editing
     # them re-embeds the job and they contribute to the cosine similarity.
     assert "kubernetes" in text
-    assert "master" in text
+    assert "data engineer" in text
     assert "." not in text
 
 

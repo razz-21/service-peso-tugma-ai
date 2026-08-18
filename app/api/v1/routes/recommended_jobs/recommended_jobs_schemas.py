@@ -55,6 +55,7 @@ class RecommendedJobJob(BaseModel):
     # fetch. `sex` is emitted as its plain string value.
     skills_required: list[str] = Field(default_factory=list)
     experience_required: str | None = None
+    experience_preferred: str | None = None
     minimum_education_attainment: list[str] = Field(default_factory=list)
     course_program: str | None = None
     age_range: str | None = None

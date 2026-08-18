@@ -321,44 +321,32 @@ def _calibrate_similarity(cosine: float) -> float:
     return max(0.0, min(1.0, (cosine - _SIM_LOW) / (_SIM_HIGH - _SIM_LOW)))
 
 
-def experience_match(
+def _experience_tier_coverage(
     applicant_years: float,
     required_years: float | None,
-    qualitative_similarity: float | None = None,
-    *,
-    is_preferred: bool = False,
-    bonus_cap: float = _DEFAULT_BONUS_CAP,
-) -> tuple[float, str | None]:
-    """Score an applicant's experience against a job's requirement.
+    qualitative_similarity: float | None,
+) -> tuple[float, float | None] | None:
+    """Coverage of a single experience tier (required *or* preferred).
 
-    The requirement may carry two independent constraints, and the applicant
-    must satisfy **both** — so they combine as a gate (the minimum), not an
-    average:
+    A tier may carry two independent constraints, and the applicant must satisfy
+    **both** — so they combine as a gate (the minimum), not an average:
 
     * **Years** — ratio of ``applicant_years`` to ``required_years`` (capped at
-      1.0), when the requirement names a number of years.
-    * **Qualitative** — a calibrated semantic similarity between the requirement's
+      1.0), when the tier names a number of years.
+    * **Qualitative** — a calibrated semantic similarity between the tier's
       field/role wording and the applicant's experience, supplied as a raw cosine
       via ``qualitative_similarity`` (the embedding is computed by the caller).
 
     Taking the minimum means met years can no longer mask an unrelated field
     (e.g. a Quality Assurance / Developer background against a "5 years as a pet
-    salon staff" requirement): the near-zero qualitative score becomes the
-    experience score, so the requirement reads as unmet rather than "partial".
-    Previously the two were averaged, so enough years in *any* field lifted an
-    unrelated applicant to ~0.5 ("partial"). This mirrors the education match's
-    level/field gate.
+    salon staff" requirement): the near-zero qualitative score becomes the tier
+    score, so it reads as unmet rather than "partial". Mirrors the education
+    match's level/field gate.
 
-    When neither component is present the requirement is treated as no constraint
-    (1.0). Returns ``(score, reason)`` where ``reason`` — the applicant's years —
-    is set only when the gate as a whole clears the "Met" threshold, so an
-    unrelated field never surfaces a "N+ yrs experience" chip.
-
-    Requirement tiering: when ``is_preferred`` is True the requirement is a
-    nice-to-have — an unmet requirement adds no penalty and a met one only
-    contributes a bounded bonus, so the score maps onto ``[1 - bonus_cap, 1.0]``
-    (via :func:`tiered_score`). When False (default) it is mandatory and behaves
-    exactly as before (the raw gate score).
+    Returns ``(coverage, years_score)`` where ``years_score`` is ``None`` when the
+    tier names no number of years (used by the caller only to decide the "N+ yrs"
+    chip). Returns ``None`` when the tier states neither constraint (no evidence
+    to score against).
     """
     years_score: float | None = None
     if required_years is not None and required_years > 0:
@@ -372,19 +360,62 @@ def experience_match(
 
     components = [score for score in (years_score, qualitative_score) if score is not None]
     if not components:
-        return 1.0, None
+        return None
     # Gate, not average: the weakest satisfied constraint bounds the score, so an
     # unrelated field can't be lifted into "partial"/"met" by met years.
-    raw = min(components)
-    # A preferred requirement can only lift the score (bonus-only, no penalty); a
-    # mandatory one is the raw gate score as before. The "Met" reason keys off the
-    # underlying gate (`raw`), so a preferred boost never fabricates a "Met" chip.
-    score = (
-        tiered_score(0.0, raw, has_mandatory=False, bonus_cap=bonus_cap) if is_preferred else raw
+    return min(components), years_score
+
+
+def experience_match(
+    applicant_years: float,
+    required_years: float | None,
+    required_similarity: float | None = None,
+    preferred_years: float | None = None,
+    preferred_similarity: float | None = None,
+    *,
+    bonus_cap: float = _DEFAULT_BONUS_CAP,
+) -> tuple[float, str | None]:
+    """Score an applicant's experience against a job's two-tier requirement.
+
+    The job may state a **mandatory** experience (``required_years`` /
+    ``required_similarity``) and a **preferred** one (``preferred_years`` /
+    ``preferred_similarity``); each tier gates its own years-and-field
+    constraints via :func:`_experience_tier_coverage`. The two tiers then combine
+    exactly like skills/education: the mandatory gate is ``cov_mandatory`` and the
+    preferred gate feeds a capped bonus through :func:`tiered_score`.
+
+    When the job states neither tier the requirement is treated as no constraint
+    (1.0). With only a mandatory tier the score is the plain gate (unchanged
+    behavior); with a preferred tier present, a met mandatory tier sits in
+    ``[1 - bonus_cap, 1.0]`` and a met preferred tier lifts it toward 1.0 — an
+    unmet preferred tier adds no penalty.
+
+    Returns ``(score, reason)`` where ``reason`` — the applicant's years — is set
+    only when the **mandatory** gate clears the "Met" threshold, so neither an
+    unrelated field nor a preferred boost ever surfaces a "N+ yrs experience" chip.
+    """
+    mandatory = _experience_tier_coverage(applicant_years, required_years, required_similarity)
+    preferred = _experience_tier_coverage(applicant_years, preferred_years, preferred_similarity)
+
+    if mandatory is None and preferred is None:
+        return 1.0, None
+
+    cov_mandatory, mandatory_years_score = mandatory if mandatory is not None else (0.0, None)
+    cov_preferred = preferred[0] if preferred is not None else 0.0
+    score = tiered_score(
+        cov_mandatory,
+        cov_preferred,
+        has_mandatory=mandatory is not None,
+        has_preferred=preferred is not None,
+        bonus_cap=bonus_cap,
     )
+    # The "Met" chip keys off the mandatory gate alone, so a preferred boost never
+    # fabricates a "Met" chip and an unrelated mandatory field never surfaces one.
     reason = (
         f"{applicant_years:.1f}+ yrs experience"
-        if years_score is not None and years_score >= 1.0 and raw >= _EXPERIENCE_MET_THRESHOLD
+        if mandatory_years_score is not None
+        and mandatory_years_score >= 1.0
+        and cov_mandatory >= _EXPERIENCE_MET_THRESHOLD
         else None
     )
     return score, reason
@@ -460,32 +491,10 @@ def _level_ordinal_score(applicant_rank: int | None, required_rank: int) -> floa
     return max(0.0, _EDUCATION_ONE_RUNG_SHORT - (gap - 1) * _EDUCATION_LEVEL_STEP)
 
 
-def _preferred_education_coverage(
-    highest_level: str | None, preferred_levels: Sequence[str]
-) -> float:
-    """Coverage of the preferred (nice-to-have) education levels, averaged.
-
-    Each recognizable preferred level contributes an ordinal met-score (see
-    :func:`_level_ordinal_score`); the average is the preferred coverage feeding
-    the bonus. Returns 0.0 when the applicant's level is unknown or no preferred
-    level is recognizable (no bonus).
-    """
-    ranks = [
-        rank for rank in (_education_rank(level) for level in preferred_levels) if rank is not None
-    ]
-    if not ranks:
-        return 0.0
-    applicant_rank = _education_rank(highest_level)
-    return sum(_level_ordinal_score(applicant_rank, rank) for rank in ranks) / len(ranks)
-
-
 def education_match(
     highest_level: str | None,
     required_levels: Sequence[str],
     course_similarity: float | None = None,
-    preferred_education: Sequence[str] = (),
-    *,
-    bonus_cap: float = _DEFAULT_BONUS_CAP,
 ) -> tuple[float, str | None]:
     """Whether the applicant's education meets the job's requirement.
 
@@ -516,12 +525,9 @@ def education_match(
     a whole passes — otherwise the reason would surface a matched degree in the
     explainability chips for an applicant whose field does not fit.
 
-    Requirement tiering: the required level/course above is the *mandatory* tier
-    (its min-gate is ``cov_mandatory``); ``preferred_education`` is the *preferred*
-    tier, whose average ordinal coverage feeds a capped bonus via
-    :func:`tiered_score`. With no preferred education the score is the plain
-    mandatory gate (unchanged behavior); with it, a met mandatory tier sits in
-    ``[1 - bonus_cap, 1.0]`` and a missing one is bounded below the cap.
+    Education has no preferred tier (unlike skills/experience): the minimum
+    attainment already captures the level requirement, so the score is the plain
+    mandatory level/course gate.
     """
     # Ordinal minimum-education-level component (the mandatory attainment).
     required_ranks = [
@@ -547,26 +553,14 @@ def education_match(
         _calibrate_similarity(course_similarity) if course_similarity is not None else None
     )
 
-    # Mandatory coverage: gate (min), not average — the weakest satisfied
-    # constraint bounds it, so an unrelated field can't be lifted into "Met" by a
-    # met level (and vice versa). None when the job states no recognizable
-    # mandatory level and no course requirement.
-    mandatory_components = [score for score in (level_score, course_score) if score is not None]
-    has_mandatory = bool(mandatory_components)
-    cov_mandatory = min(mandatory_components) if mandatory_components else 0.0
-
-    preferred = [level for level in preferred_education if level and level.strip()]
-    if not has_mandatory and not preferred:
+    # Coverage: gate (min), not average — the weakest satisfied constraint bounds
+    # it, so an unrelated field can't be lifted into "Met" by a met level (and vice
+    # versa). No recognizable level and no course requirement → no constraint (1.0).
+    components = [score for score in (level_score, course_score) if score is not None]
+    if not components:
         return 1.0, None
 
-    cov_preferred = _preferred_education_coverage(highest_level, preferred)
-    score = tiered_score(
-        cov_mandatory,
-        cov_preferred,
-        has_mandatory=has_mandatory,
-        has_preferred=bool(preferred),
-        bonus_cap=bonus_cap,
-    )
+    score = min(components)
     reason = level_reason if score >= _EDUCATION_MET_THRESHOLD else None
     return score, reason
 
@@ -611,10 +605,10 @@ def education_mandatory_met(
 def experience_mandatory_met(
     applicant_years: float,
     required_years: float | None,
-    qualitative_similarity: float | None = None,
+    required_similarity: float | None = None,
 ) -> bool:
-    """Whether the applicant meets a *mandatory* experience requirement (not preferred)."""
-    score, _ = experience_match(applicant_years, required_years, qualitative_similarity)
+    """Whether the applicant meets a job's *mandatory* experience tier (no preferred bonus)."""
+    score, _ = experience_match(applicant_years, required_years, required_similarity)
     return score >= _EXPERIENCE_MET_THRESHOLD
 
 

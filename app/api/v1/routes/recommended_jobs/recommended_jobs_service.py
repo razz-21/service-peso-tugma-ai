@@ -382,6 +382,22 @@ async def generate_recommendations(
     qual_vectors = embed_batch([job_qual_terms[job.id] or "" for job in qual_jobs])
     job_qual_vec = {job.id: vec for job, vec in zip(qual_jobs, qual_vectors, strict=True)}
 
+    # Same treatment for each job's *preferred* experience requirement, embedded in
+    # its own batch so the per-job loop can score the nice-to-have tier's field/role
+    # wording against the applicant without re-encoding.
+    job_pref_qual_raw = {
+        job.id: experience_requirement_terms(job.experience_preferred) for job in jobs
+    }
+    job_pref_qual_terms = {
+        job_id: (strip_degree_framing(raw) or None) if raw else None
+        for job_id, raw in job_pref_qual_raw.items()
+    }
+    pref_qual_jobs = [job for job in jobs if job_pref_qual_terms[job.id]]
+    pref_qual_vectors = embed_batch([job_pref_qual_terms[job.id] or "" for job in pref_qual_jobs])
+    job_pref_qual_vec = {
+        job.id: vec for job, vec in zip(pref_qual_jobs, pref_qual_vectors, strict=True)
+    }
+
     # Embed each job's preferred course/program (field-of-study wording) in one
     # batch, so the per-job loop can cosine-compare it to the applicant's course
     # for the education dimension without re-encoding. Degree framing is stripped
@@ -462,20 +478,30 @@ async def generate_recommendations(
                 job.preferred_skills,
             )
         ]
-        qualitative_similarity: float | None = None
+        required_similarity: float | None = None
         if job_qual_terms[job.id] is not None:
             qual_vec = job_qual_vec.get(job.id)
-            qualitative_similarity = (
+            required_similarity = (
                 cosine_similarity(applicant_experience_vec, qual_vec)
                 if applicant_experience_vec is not None and qual_vec is not None
                 else 0.0
             )
+        preferred_similarity: float | None = None
+        if job_pref_qual_terms[job.id] is not None:
+            pref_qual_vec = job_pref_qual_vec.get(job.id)
+            preferred_similarity = (
+                cosine_similarity(applicant_experience_vec, pref_qual_vec)
+                if applicant_experience_vec is not None and pref_qual_vec is not None
+                else 0.0
+            )
         required_years = parse_required_years(job.experience_required)
+        preferred_years = parse_required_years(job.experience_preferred)
         experience, experience_reason = experience_match(
             applicant_years,
             required_years,
-            qualitative_similarity,
-            is_preferred=job.experience_is_preferred,
+            required_similarity,
+            preferred_years,
+            preferred_similarity,
             bonus_cap=settings.REQUIREMENT_BONUS_CAP,
         )
         course_similarity: float | None = None
@@ -490,8 +516,6 @@ async def generate_recommendations(
             highest_education,
             job.minimum_education_attainment,
             course_similarity,
-            job.preferred_education,
-            bonus_cap=settings.REQUIREMENT_BONUS_CAP,
         )
         # Optional hard-gate: when GATE_ON_MANDATORY is enabled, exclude the job
         # entirely if the applicant fails any mandatory (must-have) requirement,
@@ -505,10 +529,7 @@ async def generate_recommendations(
             and education_mandatory_met(
                 highest_education, job.minimum_education_attainment, course_similarity
             )
-            and (
-                job.experience_is_preferred
-                or experience_mandatory_met(applicant_years, required_years, qualitative_similarity)
-            )
+            and experience_mandatory_met(applicant_years, required_years, required_similarity)
         ):
             continue
         location, location_reason = location_match(applicant.preferred_work_location, job.location)
