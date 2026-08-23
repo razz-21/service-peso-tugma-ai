@@ -137,3 +137,17 @@ class JobList(BaseModel):
     limit: int
     offset: int
     items: list[JobRead]
+
+
+class JobImportRequest(BaseModel):
+    """A batch of postings to create at once (spreadsheet import). Each job names
+    its own company — all typically the same company being imported into."""
+
+    jobs: list[JobCreate] = Field(min_length=1)
+
+
+class JobImportResult(BaseModel):
+    """Summary of a bulk job import: how many were created."""
+
+    created: int
+    jobs: list[JobRead]

@@ -15,6 +15,8 @@ from .jobs_models import Job, JobStatus
 from .jobs_schemas import (
     JobCompany,
     JobCreate,
+    JobImportRequest,
+    JobImportResult,
     JobList,
     JobPatch,
     JobRead,
@@ -112,6 +114,39 @@ async def create_job(
         records=[job.title, company.company_name],
     )
     return _to_read(job, company)
+
+
+@router.post("/import", response_model=JobImportResult, status_code=status.HTTP_201_CREATED)
+async def import_jobs(
+    data: JobImportRequest,
+    workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> JobImportResult:
+    # Bulk-create postings from an uploaded spreadsheet. Each job's company is
+    # validated against the workspace (companies are cached across rows since an
+    # import is typically all for one company).
+    reads: list[JobRead] = []
+    companies: dict[UUID, Company] = {}
+    for item in data.jobs:
+        company = companies.get(item.company_id)
+        if company is None:
+            company = await _require_company(item.company_id, workspace_id)
+            companies[item.company_id] = company
+        job = await jobs_service.create_job(item, workspace_id=workspace_id)
+        reads.append(_to_read(job, company))
+
+    await audit_logs_service.record_audit(
+        workspace_id=workspace_id,
+        entity=AuditEntity.JOB,
+        entity_label="Job",
+        actor=current_user.fullname,
+        action=f"imported {len(reads)} job listings",
+        icon="work",
+        icon_tone=AuditTone.GREEN,
+        chip_tone=AuditTone.GREEN,
+        records=[f"{len(reads)} jobs"],
+    )
+    return JobImportResult(created=len(reads), jobs=reads)
 
 
 @router.get("", response_model=JobList)
