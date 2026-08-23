@@ -3,6 +3,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
+from app.api.v1.routes.recommended_jobs.recommended_jobs_models import RecommendedJobStatus
+
 from .applicants_models import (
     Address,
     ApplicantStatus,
@@ -239,3 +241,36 @@ class ResumeExtraction(BaseModel):
     preferred_occupation_industry: list[PreferredOccupationIndustry] = Field(default_factory=list)
     raw_text: str = ""
     meta: ResumeExtractionMeta
+
+
+class ApplicantImportItem(BaseModel):
+    """One applicant from a bulk import, plus an optional job assignment.
+
+    When `job_id` is set the applicant is also referred to that job (a referral
+    is created in `status`, defaulting to ``referred``). Unlike the manual
+    referral flow, importing a referral does **not** consume the job's vacancy.
+    """
+
+    applicant: ApplicantCreate
+    job_id: UUID | None = None
+    status: RecommendedJobStatus | None = None
+    # Registered date from the imported file (ISO). Sets the applicant's
+    # `created_at`; omitted/None dates the record at import time.
+    date_registered: str | None = None
+
+    @field_validator("date_registered", mode="before")
+    @classmethod
+    def _coerce_isoformat(cls, value: object) -> object:
+        return _to_isoformat(value)
+
+
+class ApplicantImportRequest(BaseModel):
+    items: list[ApplicantImportItem] = Field(min_length=1)
+
+
+class ApplicantImportResult(BaseModel):
+    """Summary of a bulk import: how many were registered and referred."""
+
+    created: int
+    referred: int
+    applicants: list[ApplicantRead]

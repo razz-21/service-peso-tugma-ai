@@ -21,9 +21,17 @@ async def get_applicant(applicant_id: UUID, workspace_id: UUID) -> Applicant | N
 
 
 async def create_applicant(
-    data: ApplicantCreate, created_by: UUID, workspace_id: UUID
+    data: ApplicantCreate,
+    created_by: UUID,
+    workspace_id: UUID,
+    created_at: str | None = None,
 ) -> Applicant:
     applicant = Applicant(**data.model_dump(), created_by=created_by, workspace_id=workspace_id)
+    # Bulk imports carry the registered date from the source file; honor it as the
+    # record's `created_at` so reports date the applicant when they registered,
+    # not when the file was imported. Omitted → the model's now() default stands.
+    if created_at is not None:
+        applicant.created_at = created_at
     await applicant.insert()
     return applicant
 

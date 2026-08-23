@@ -24,6 +24,16 @@ async def test_create_applicant_requires_auth(client: AsyncClient) -> None:
     assert response.status_code == 401
 
 
+async def test_import_applicants_requires_auth(client: AsyncClient) -> None:
+    # The bulk-import endpoint sits behind the same `auth_required` guard, so an
+    # unauthenticated request is rejected before it ever reaches Mongo.
+    response = await client.post(
+        f"{settings.API_V1_PREFIX}/applicants/import",
+        json={"items": [{"applicant": {"firstname": "Ada", "lastname": "Lovelace"}}]},
+    )
+    assert response.status_code == 401
+
+
 # --- Cascade delete --------------------------------------------------------
 
 
