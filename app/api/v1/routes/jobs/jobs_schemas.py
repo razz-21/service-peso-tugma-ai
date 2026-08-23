@@ -81,6 +81,16 @@ class JobCreate(BaseModel):
     eligibility: str | None = None
     status: JobStatus = JobStatus.ACTIVE
     company_id: UUID
+    # Creation date (ISO). Lets an officer backdate a posting to a previous
+    # creation instead of "now"; omitted → the server stamps `created_at` now.
+    created_at: str | None = None
+
+    @field_validator("created_at", mode="before")
+    @classmethod
+    def _created_at_isoformat(cls, value: object) -> object:
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return value
 
 
 class JobPatch(BaseModel):
@@ -101,7 +111,17 @@ class JobPatch(BaseModel):
     eligibility: str | None = None
     status: JobStatus | None = None
     company_id: UUID | None = None
+    # Editable creation date (ISO) so an officer can correct/backdate an existing
+    # posting; only applied when explicitly sent (see update_job's exclude_unset).
+    created_at: str | None = None
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+    @field_validator("created_at", mode="before")
+    @classmethod
+    def _created_at_isoformat(cls, value: object) -> object:
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return value
 
 
 class JobRead(JobBase):
