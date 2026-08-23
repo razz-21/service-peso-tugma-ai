@@ -135,8 +135,11 @@ class ApplicantCreate(BaseModel):
     eligibility: list[Eligibility] = Field(default_factory=list)
     work_experience: list[WorkExperience] = Field(default_factory=list)
     technical_skills: list[str] = Field(default_factory=list)
+    # Registration date (ISO). Lets an officer backdate an applicant to a previous
+    # registration instead of "now"; omitted → the server stamps `created_at` now.
+    created_at: str | None = None
 
-    @field_validator("date_of_birth", mode="before")
+    @field_validator("date_of_birth", "created_at", mode="before")
     @classmethod
     def _coerce_isoformat(cls, value: object) -> object:
         return _to_isoformat(value)
