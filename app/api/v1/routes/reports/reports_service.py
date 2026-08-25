@@ -28,6 +28,7 @@ from .reports_schemas import (
     ApplicantReferredRow,
     ApplicantRegisteredReport,
     ApplicantRegisteredRow,
+    EmploymentSummaryReport,
     EstablishmentRow,
     EstablishmentsRegisteredReport,
     JobSolicitedReport,
@@ -38,8 +39,10 @@ from .reports_schemas import (
     NewRegistrantsCard,
     PesoAccomplishmentReport,
     ReferralFunnelReport,
+    SummaryMetric,
     TopOccupation,
     TopPlacedPosition,
+    TopVacancyRow,
     VacanciesSolicitedCard,
 )
 
@@ -887,8 +890,9 @@ def _by_type(companies: list[_CompanyDoc]) -> list[LabeledCount]:
 async def get_establishments_registered(
     workspace_id: UUID, start_date: date, end_date: date
 ) -> EstablishmentsRegisteredReport:
-    # Most figures here are all-time (total, corporations, active-jobs, by-type,
-    # directory); only "new this period" is scoped to the selected window.
+    # The headline aggregates (total, corporations, active-jobs, by-type) are
+    # all-time context; "new this period" and the directory are scoped to the
+    # selected window — the directory lists establishments registered within it.
     length_days = (end_date - start_date).days + 1
     start_iso = _day_start_iso(start_date)
     end_iso = _day_start_iso(end_date + timedelta(days=1))
@@ -902,7 +906,8 @@ async def get_establishments_registered(
     )
 
     total_establishments = len(companies)
-    new_count = sum(1 for c in companies if start_iso <= c.created_at < end_iso)
+    window_companies = [c for c in companies if start_iso <= c.created_at < end_iso]
+    new_count = len(window_companies)
     prev_count = sum(1 for c in companies if prev_start_iso <= c.created_at < start_iso)
     change = new_count - prev_count if prev_count > 0 else None
     corporations = sum(1 for c in companies if c.company_type == CompanyType.CORPORATION.value)
@@ -920,7 +925,7 @@ async def get_establishments_registered(
             jobs_posted=jobs_by_company.get(company.id, 0),
             registered=company.created_at,
         )
-        for company in companies
+        for company in window_companies
     ]
 
     return EstablishmentsRegisteredReport(
@@ -981,6 +986,163 @@ async def get_peso_accomplishment(
         applicants_referred=referred,
         applicants_placed=placed,
         placement_rate=placement_rate,
+    )
+
+
+# --- Employment Summary ----------------------------------------------------
+
+# The "working" employment statuses (see the applicant form's options). Matched
+# on the normalised value so "Unemployed" — which contains the substring
+# "employed" — correctly reads as *not* employed.
+_EMPLOYED_STATUSES = frozenset({"employed", "self-employed", "underemployed"})
+
+
+def _is_employed(status: str | None) -> bool:
+    # A registrant reads as employed only when their status is one of the working
+    # categories; a blank or "Unemployed" status reads as unemployed.
+    return (status or "").strip().lower() in _EMPLOYED_STATUSES
+
+
+class _EmploymentDoc(BaseModel):
+    # Projection over `applicants` for the status / gender breakdown — just the two
+    # fields the summary needs, skipping the heavy resume text and embeddings.
+    sex: str | None = None
+    employment_status: str | None = None
+
+
+class _TopVacancyDoc(BaseModel):
+    # Projection over `jobs` for the Top 10 table — skips the heavy `embedding`.
+    title: str
+    no_of_vacancies: int = 0
+    location: str | None = None
+    company_id: UUID
+
+
+async def _top_vacancies(workspace_id: UUID, lo: str, hi: str) -> list[TopVacancyRow]:
+    # The window's solicited listings ranked by vacancy count, top 10 — scoped to
+    # [lo, hi) by `created_at`, the same definition as the "Vacancies solicited"
+    # headline, so the table reconciles with the selected date filter.
+    jobs = (
+        await Job.find(
+            Job.workspace_id == workspace_id,
+            Job.created_at >= lo,
+            Job.created_at < hi,
+        )
+        .project(_TopVacancyDoc)
+        .sort("-no_of_vacancies")
+        .limit(10)
+        .to_list()
+    )
+    company_ids = list({job.company_id for job in jobs})
+    companies = (
+        await Company.find(
+            In(Company.id, company_ids), Company.workspace_id == workspace_id
+        ).to_list()
+        if company_ids
+        else []
+    )
+    company_by_id = {company.id: company for company in companies}
+    rows: list[TopVacancyRow] = []
+    for job in jobs:
+        company = company_by_id.get(job.company_id)
+        rows.append(
+            TopVacancyRow(
+                job_title=job.title,
+                company=company.company_name if company else None,
+                company_avatar=company.avatar if company else None,
+                vacancies=job.no_of_vacancies,
+                location=job.location,
+            )
+        )
+    return rows
+
+
+async def get_employment_summary(
+    workspace_id: UUID, start_date: date, end_date: date
+) -> EmploymentSummaryReport:
+    # A one-glance snapshot: three headline cards (each vs the immediately preceding
+    # window of equal length) plus the employment-status, placement-rate, and
+    # unemployed-by-gender breakdowns — all scoped to [start_date, end_date],
+    # reusing the same definitions as the individual reports.
+    length_days = (end_date - start_date).days + 1
+    start_iso = _day_start_iso(start_date)
+    end_iso = _day_start_iso(end_date + timedelta(days=1))
+    prev_start_iso = _day_start_iso(start_date - timedelta(days=length_days))
+
+    vacancies = await _sum_vacancies(workspace_id, start_iso, end_iso)
+    prev_vacancies = await _sum_vacancies(workspace_id, prev_start_iso, start_iso)
+
+    prev_registered = await Applicant.find(
+        Applicant.workspace_id == workspace_id,
+        Applicant.created_at >= prev_start_iso,
+        Applicant.created_at < start_iso,
+    ).count()
+
+    placed = await RecommendedJob.find(
+        RecommendedJob.workspace_id == workspace_id,
+        RecommendedJob.updated_at >= start_iso,
+        RecommendedJob.updated_at < end_iso,
+        _hired(),
+    ).count()
+    prev_placed = await RecommendedJob.find(
+        RecommendedJob.workspace_id == workspace_id,
+        RecommendedJob.updated_at >= prev_start_iso,
+        RecommendedJob.updated_at < start_iso,
+        _hired(),
+    ).count()
+
+    # Employment-status and gender split over the registered-in-window cohort.
+    cohort = (
+        await Applicant.find(
+            Applicant.workspace_id == workspace_id,
+            Applicant.created_at >= start_iso,
+            Applicant.created_at < end_iso,
+        )
+        .project(_EmploymentDoc)
+        .to_list()
+    )
+    registered_total = len(cohort)
+    employed = sum(1 for a in cohort if _is_employed(a.employment_status))
+    unemployed = registered_total - employed
+    unemployed_male = sum(
+        1 for a in cohort if not _is_employed(a.employment_status) and a.sex == Sex.MALE.value
+    )
+    unemployed_female = sum(
+        1 for a in cohort if not _is_employed(a.employment_status) and a.sex == Sex.FEMALE.value
+    )
+
+    # Placement rate: placements over referrals created in the window.
+    referred = await RecommendedJob.find(
+        RecommendedJob.workspace_id == workspace_id,
+        RecommendedJob.created_at >= start_iso,
+        RecommendedJob.created_at < end_iso,
+        _referred(),
+    ).count()
+    placement_rate = round(placed / referred * 100, 1) if referred else 0.0
+
+    top_vacancies = await _top_vacancies(workspace_id, start_iso, end_iso)
+
+    return EmploymentSummaryReport(
+        start_date=start_date,
+        end_date=end_date,
+        vacancies_solicited=SummaryMetric(
+            value=vacancies, change_pct=_percent_change(vacancies, prev_vacancies)
+        ),
+        registered_applicants=SummaryMetric(
+            value=registered_total, change_pct=_percent_change(registered_total, prev_registered)
+        ),
+        placed_applicants=SummaryMetric(
+            value=placed, change_pct=_percent_change(placed, prev_placed)
+        ),
+        registered_total=registered_total,
+        employed=employed,
+        unemployed=unemployed,
+        referred=referred,
+        placed=placed,
+        placement_rate=placement_rate,
+        unemployed_male=unemployed_male,
+        unemployed_female=unemployed_female,
+        top_vacancies=top_vacancies,
     )
 
 
