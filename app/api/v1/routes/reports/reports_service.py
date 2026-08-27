@@ -43,6 +43,7 @@ from .reports_schemas import (
     TopOccupation,
     TopPlacedPosition,
     TopVacancyRow,
+    UnemployedByEducationReport,
     VacanciesSolicitedCard,
 )
 
@@ -742,6 +743,26 @@ async def _active_applicant_ids(workspace_id: UUID, applicant_ids: list[UUID]) -
     return {ref.applicant_id for ref in refs if ref.applicant_id}
 
 
+async def _hired_applicant_ids(workspace_id: UUID, applicant_ids: list[UUID]) -> set[UUID]:
+    # Which of these applicants have been hired — i.e. they have a referral that
+    # reached HIRED. Employment is read from this placement outcome rather than
+    # the self-reported `employment_status`: an applicant counts as employed only
+    # once the office has actually placed them into a job; everyone else (no
+    # referral, or a referral that never reached HIRED) reads as unemployed.
+    if not applicant_ids:
+        return set()
+    refs = (
+        await RecommendedJob.find(
+            In(RecommendedJob.applicant_id, applicant_ids),
+            RecommendedJob.workspace_id == workspace_id,
+            _hired(),
+        )
+        .project(_ActiveApplicantDoc)
+        .to_list()
+    )
+    return {ref.applicant_id for ref in refs if ref.applicant_id}
+
+
 async def get_applicant_registered(
     workspace_id: UUID, start_date: date, end_date: date
 ) -> ApplicantRegisteredReport:
@@ -991,23 +1012,19 @@ async def get_peso_accomplishment(
 
 # --- Employment Summary ----------------------------------------------------
 
-# The "working" employment statuses (see the applicant form's options). Matched
-# on the normalised value so "Unemployed" — which contains the substring
-# "employed" — correctly reads as *not* employed.
-_EMPLOYED_STATUSES = frozenset({"employed", "self-employed", "underemployed"})
-
-
-def _is_employed(status: str | None) -> bool:
-    # A registrant reads as employed only when their status is one of the working
-    # categories; a blank or "Unemployed" status reads as unemployed.
-    return (status or "").strip().lower() in _EMPLOYED_STATUSES
+# Employment is derived from the applicant's referrals, not the self-reported
+# `employment_status`: an applicant reads as employed only once a referral has
+# reached HIRED (see `_hired_applicant_ids`), and as unemployed otherwise.
 
 
 class _EmploymentDoc(BaseModel):
-    # Projection over `applicants` for the status / gender breakdown — just the two
-    # fields the summary needs, skipping the heavy resume text and embeddings.
+    # Projection over `applicants` for the gender split — the applicant id (to
+    # match against hired referrals) and sex, skipping the heavy resume text and
+    # embeddings.
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: UUID = Field(alias="_id")
     sex: str | None = None
-    employment_status: str | None = None
 
 
 class _TopVacancyDoc(BaseModel):
@@ -1091,7 +1108,8 @@ async def get_employment_summary(
         _hired(),
     ).count()
 
-    # Employment-status and gender split over the registered-in-window cohort.
+    # Employment and gender split over the registered-in-window cohort; an
+    # applicant reads as employed only when one of their referrals reached HIRED.
     cohort = (
         await Applicant.find(
             Applicant.workspace_id == workspace_id,
@@ -1101,14 +1119,13 @@ async def get_employment_summary(
         .project(_EmploymentDoc)
         .to_list()
     )
+    hired_ids = await _hired_applicant_ids(workspace_id, [a.id for a in cohort])
     registered_total = len(cohort)
-    employed = sum(1 for a in cohort if _is_employed(a.employment_status))
+    employed = sum(1 for a in cohort if a.id in hired_ids)
     unemployed = registered_total - employed
-    unemployed_male = sum(
-        1 for a in cohort if not _is_employed(a.employment_status) and a.sex == Sex.MALE.value
-    )
+    unemployed_male = sum(1 for a in cohort if a.id not in hired_ids and a.sex == Sex.MALE.value)
     unemployed_female = sum(
-        1 for a in cohort if not _is_employed(a.employment_status) and a.sex == Sex.FEMALE.value
+        1 for a in cohort if a.id not in hired_ids and a.sex == Sex.FEMALE.value
     )
 
     # Placement rate: placements over referrals created in the window.
@@ -1143,6 +1160,117 @@ async def get_employment_summary(
         unemployed_male=unemployed_male,
         unemployed_female=unemployed_female,
         top_vacancies=top_vacancies,
+    )
+
+
+# --- Unemployed Applicants by Education ------------------------------------
+
+
+def _education_bucket(level: str | None) -> str | None:
+    # Normalise a free-text highest-education-level into one canonical bucket for
+    # the attainment chart. Checks run most-specific first so, e.g., a master's
+    # degree reads as Postgraduate (not College Graduate) and "College
+    # Undergraduate" reads as in-progress (not a completed degree). Returns None
+    # when nothing is recorded, so blank attainments drop out of the breakdown.
+    text = (level or "").strip().lower()
+    if not text:
+        return None
+    if any(k in text for k in ("postgrad", "post grad", "post-grad", "master", "doctor", "phd")):
+        return "Postgraduate"
+    if any(k in text for k in ("college graduate", "college grad", "bachelor", "baccalaureate")):
+        return "College Graduate"
+    if any(k in text for k in ("college", "undergraduate", "tertiary")):
+        return "College Undergraduate"
+    if "senior high" in text or text == "shs":
+        return "Senior High School"
+    if "junior high" in text:
+        return "Junior High School"
+    if "high school" in text or "secondary" in text:
+        return "Senior High School"
+    if "elementary" in text or "primary" in text:
+        return "Elementary"
+    if "vocational" in text or "technical" in text:
+        return "Vocational"
+    return "Other"
+
+
+class _EducationDoc(BaseModel):
+    # Projection over `applicants` for the education breakdown — the applicant id
+    # (to match against hired referrals) and schooling, skipping the heavy resume
+    # text and embeddings.
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: UUID = Field(alias="_id")
+    educational_background: EducationalBackground | None = None
+
+
+async def get_unemployed_by_education(
+    workspace_id: UUID, start_date: date, end_date: date
+) -> UnemployedByEducationReport:
+    # Cohort = applicants registered in the window who have NOT been hired (no
+    # referral that reached HIRED — the same rule the Employment Summary uses).
+    # Everything else is derived from that cohort's educational background.
+    start_iso = _day_start_iso(start_date)
+    end_iso = _day_start_iso(end_date + timedelta(days=1))
+
+    cohort = (
+        await Applicant.find(
+            Applicant.workspace_id == workspace_id,
+            Applicant.created_at >= start_iso,
+            Applicant.created_at < end_iso,
+        )
+        .project(_EducationDoc)
+        .to_list()
+    )
+    hired_ids = await _hired_applicant_ids(workspace_id, [a.id for a in cohort])
+    unemployed = [a for a in cohort if a.id not in hired_ids]
+    total_unemployed = len(unemployed)
+
+    # Bucket the cohort by highest educational attainment (blank attainments drop
+    # out); the "College Graduate" bucket also drives the headline card.
+    buckets = Counter(
+        bucket
+        for a in unemployed
+        if (
+            bucket := _education_bucket(
+                a.educational_background.highest_education_level
+                if a.educational_background
+                else None
+            )
+        )
+    )
+    college_graduates = buckets.get("College Graduate", 0)
+    by_education_level = [
+        LabeledCount(label=label, count=count) for label, count in buckets.most_common()
+    ]
+
+    # Count course/program headcount over the unemployed who list one; a blank
+    # course reads as "no course" and drops out of the breakdown.
+    course_counts = Counter(
+        a.educational_background.course_program.strip()
+        for a in unemployed
+        if a.educational_background
+        and a.educational_background.course_program
+        and a.educational_background.course_program.strip()
+    )
+    with_course = sum(course_counts.values())
+    top_courses = [
+        LabeledCount(label=label, count=count) for label, count in course_counts.most_common(10)
+    ]
+    most_common_course = top_courses[0].label if top_courses else None
+    top3 = sum(count for _, count in course_counts.most_common(3))
+    top3_share_pct = round(top3 / with_course * 100, 1) if with_course else 0.0
+
+    return UnemployedByEducationReport(
+        start_date=start_date,
+        end_date=end_date,
+        total_unemployed=total_unemployed,
+        most_common_course=most_common_course,
+        college_graduates=college_graduates,
+        with_course=with_course,
+        top3_share_pct=top3_share_pct,
+        top_courses=top_courses,
+        by_education_level=by_education_level,
     )
 
 
