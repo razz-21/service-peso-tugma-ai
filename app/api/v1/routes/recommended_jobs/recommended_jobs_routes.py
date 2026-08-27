@@ -3,10 +3,10 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
-from app.api.deps import get_current_user, get_current_workspace_id
+from app.api.deps import get_current_user, get_current_workspace_id, require_roles
 from app.api.v1.routes.audit_logs import audit_logs_service
 from app.api.v1.routes.audit_logs.audit_logs_models import AuditEntity, AuditTone
-from app.api.v1.routes.users.users_models import User
+from app.api.v1.routes.users.users_models import User, UserRole
 from app.matching.primary_requirements import has_open_vacancy
 
 from ..applicants import applicants_service
@@ -310,6 +310,9 @@ async def update_recommended_job(
 async def delete_recommended_job(
     recommended_job_id: UUID,
     workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+    # Deleting a referral is destructive and reserved for admins / super admins;
+    # officers manage the referral lifecycle but may not remove referrals outright.
+    current_user: Annotated[User, Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.ADMIN))],
 ) -> None:
     recommended_job = await recommended_jobs_service.get_recommended_job(
         recommended_job_id, workspace_id=workspace_id
@@ -318,8 +321,34 @@ async def delete_recommended_job(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Recommended job not found"
         )
+    # Resolve the job/company for the audit trail before the row is gone. Only a
+    # referred recommendation is worth auditing — an untouched recommendation
+    # carries no referral history.
+    was_referral = recommended_jobs_service.starts_holding_vacancy(None, recommended_job.status)
+    job = (
+        await jobs_service.get_job(recommended_job.job_id, workspace_id=workspace_id)
+        if was_referral
+        else None
+    )
+    company = (
+        await companies_service.get_company(job.company_id, workspace_id=workspace_id)
+        if job is not None
+        else None
+    )
     if not await recommended_jobs_service.delete_recommended_job(recommended_job):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete recommended job",
+        )
+    if was_referral:
+        await audit_logs_service.record_audit(
+            workspace_id=workspace_id,
+            entity=AuditEntity.REFERRALS,
+            entity_label="Referral",
+            actor=current_user.fullname,
+            action="deleted a referral to",
+            icon="delete",
+            icon_tone=AuditTone.RED,
+            chip_tone=AuditTone.RED,
+            records=([job.title] if job else []) + ([company.company_name] if company else []),
         )
