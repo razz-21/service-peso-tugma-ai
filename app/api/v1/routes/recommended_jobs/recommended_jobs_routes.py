@@ -7,6 +7,8 @@ from app.api.deps import get_current_user, get_current_workspace_id, require_rol
 from app.api.v1.routes.audit_logs import audit_logs_service
 from app.api.v1.routes.audit_logs.audit_logs_models import AuditEntity, AuditTone
 from app.api.v1.routes.users.users_models import User, UserRole
+from app.core.config import settings
+from app.core.rate_limit import rate_limit
 from app.matching.primary_requirements import has_open_vacancy
 
 from ..applicants import applicants_service
@@ -148,6 +150,7 @@ async def create_recommended_job(
     "/generate",
     response_model=list[RecommendedJobRead],
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit("generate", settings.RATE_LIMIT_GENERATE_USER, by="user"))],
 )
 async def generate_recommendations(
     data: RecommendedJobGenerate,

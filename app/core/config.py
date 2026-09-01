@@ -74,6 +74,21 @@ class Settings(BaseSettings):
     COOKIE_SAMESITE: Literal["lax", "strict", "none"] = "lax"
     COOKIE_DOMAIN: str | None = None
 
+    # Rate limiting (see app/core/rate_limit.py). Counters live in MongoDB so the
+    # limits hold across Vercel's serverless instances; an in-memory limiter would
+    # reset on every cold start and per parallel instance. Each value is
+    # "<count>/<window>", the window suffixed s | m | h (see `parse_rate`).
+    # Set RATE_LIMIT_ENABLED=false (e.g. in tests) to bypass all limiters.
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_LOGIN_IP: str = "20/15m"
+    RATE_LIMIT_LOGIN_EMAIL: str = "5/15m"
+    RATE_LIMIT_REGISTER_IP: str = "5/1h"
+    RATE_LIMIT_REFRESH_IP: str = "60/15m"
+    RATE_LIMIT_PASSWORD_CHANGE: str = "10/1h"
+    RATE_LIMIT_EXTRACT_USER: str = "20/1h"
+    RATE_LIMIT_UPLOAD_USER: str = "60/1h"
+    RATE_LIMIT_GENERATE_USER: str = "30/1h"
+
     @model_validator(mode="after")
     def assemble_mongodb_uri(self) -> "Settings":
         # Prefer an explicit MONGODB_URI from the environment; otherwise build it

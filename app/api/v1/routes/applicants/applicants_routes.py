@@ -7,6 +7,8 @@ from app.api.deps import get_current_user, get_current_workspace_id
 from app.api.v1.routes.audit_logs import audit_logs_service
 from app.api.v1.routes.audit_logs.audit_logs_models import AuditEntity, AuditTone
 from app.api.v1.routes.users.users_models import User
+from app.core.config import settings
+from app.core.rate_limit import rate_limit
 from app.matching.extraction import ExtractionError, extract_text
 
 from ..jobs import jobs_service
@@ -135,7 +137,11 @@ async def import_applicants(
     )
 
 
-@router.post("/extract", response_model=ResumeExtraction)
+@router.post(
+    "/extract",
+    response_model=ResumeExtraction,
+    dependencies=[Depends(rate_limit("extract", settings.RATE_LIMIT_EXTRACT_USER, by="user"))],
+)
 async def extract_applicant_resume(
     file: Annotated[UploadFile, File()],
 ) -> ResumeExtraction:
@@ -237,6 +243,7 @@ async def delete_applicant(
     "/{applicant_id}/files",
     response_model=ApplicantRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit("upload", settings.RATE_LIMIT_UPLOAD_USER, by="user"))],
 )
 async def upload_applicant_file(
     applicant_id: UUID,

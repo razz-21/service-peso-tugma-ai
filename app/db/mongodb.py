@@ -13,6 +13,7 @@ from app.api.v1.routes.recommended_jobs.recommended_jobs_models import Recommend
 from app.api.v1.routes.users.users_models import User
 from app.api.v1.routes.workspaces.workspaces_models import Workspace
 from app.core.config import settings
+from app.core.rate_limit_models import RateLimitCounter
 
 _client: AsyncMongoClient[dict[str, Any]] | None = None
 _init_lock = asyncio.Lock()
@@ -46,6 +47,7 @@ async def init_mongo() -> None:
                 RecommendedJob,
                 AuditLog,
                 FileObject,
+                RateLimitCounter,
             ],
         )
         _client = client
