@@ -3,10 +3,10 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
-from app.api.deps import get_current_user, get_current_workspace_id
+from app.api.deps import get_current_user, get_current_workspace_id, require_roles
 from app.api.v1.routes.audit_logs import audit_logs_service
 from app.api.v1.routes.audit_logs.audit_logs_models import AuditEntity, AuditTone
-from app.api.v1.routes.users.users_models import User
+from app.api.v1.routes.users.users_models import User, UserRole
 from app.core.blob import AVATAR_CONTENT_TYPE_EXTENSIONS, AVATAR_MAX_BYTES
 
 from . import companies_service
@@ -168,7 +168,9 @@ async def remove_company_avatar(
 async def delete_company(
     company_id: UUID,
     workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[
+        User, Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.ADMIN))
+    ],
 ) -> None:
     company = await companies_service.get_company(company_id, workspace_id=workspace_id)
     if company is None:

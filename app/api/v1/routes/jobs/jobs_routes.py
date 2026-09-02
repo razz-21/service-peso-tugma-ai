@@ -3,10 +3,10 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.api.deps import get_current_user, get_current_workspace_id
+from app.api.deps import get_current_user, get_current_workspace_id, require_roles
 from app.api.v1.routes.audit_logs import audit_logs_service
 from app.api.v1.routes.audit_logs.audit_logs_models import AuditDiffRow, AuditEntity, AuditTone
-from app.api.v1.routes.users.users_models import User
+from app.api.v1.routes.users.users_models import User, UserRole
 
 from ..companies import companies_service
 from ..companies.companies_models import Company
@@ -210,7 +210,9 @@ async def update_job(
 async def delete_job(
     job_id: UUID,
     workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[
+        User, Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.ADMIN))
+    ],
 ) -> None:
     job = await jobs_service.get_job(job_id, workspace_id=workspace_id)
     if job is None:
