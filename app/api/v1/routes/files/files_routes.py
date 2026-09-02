@@ -16,6 +16,8 @@ from fastapi import (
 
 from app.api.deps import get_current_user, get_current_workspace_id
 from app.api.v1.routes.users.users_models import User
+from app.core.config import settings
+from app.core.rate_limit import rate_limit
 
 from . import files_service
 from .files_schemas import FileList, FileRead
@@ -23,7 +25,12 @@ from .files_schemas import FileList, FileRead
 router = APIRouter()
 
 
-@router.post("", response_model=FileRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=FileRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit("upload", settings.RATE_LIMIT_UPLOAD_USER, by="user"))],
+)
 async def upload_file(
     workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
     current_user: Annotated[User, Depends(get_current_user)],

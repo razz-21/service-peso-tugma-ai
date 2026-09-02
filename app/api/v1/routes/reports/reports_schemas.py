@@ -288,6 +288,73 @@ class PesoAccomplishmentReport(BaseModel):
     placement_rate: float
 
 
+# --- Employment Summary ----------------------------------------------------
+
+
+class SummaryMetric(BaseModel):
+    """A headline metric with a period-over-period badge.
+
+    `value` is the count within the selected window; `change_pct` is the
+    percentage change versus the immediately preceding window of equal length
+    (may be negative). ``None`` when that prior window was empty — there is no
+    baseline to compare against, so the client hides the "vs last period" badge.
+    """
+
+    value: int
+    change_pct: float | None = None
+
+
+class TopVacancyRow(BaseModel):
+    """One row of the "Top 10 job vacancies" table — an open listing and the
+    establishment that posted it. `company` / `company_avatar` / `location` are
+    ``None`` when the listing has no linked company, the company has no logo, or
+    there is no recorded location. `company_avatar` is the company logo (a data
+    URL / image URL); the client falls back to generated initials when absent."""
+
+    job_title: str
+    company: str | None = None
+    company_avatar: str | None = None
+    vacancies: int
+    location: str | None = None
+
+
+class EmploymentSummaryReport(BaseModel):
+    """The "Employment Summary Report": a one-glance snapshot of the office's
+    employment facilitation for the selected window.
+
+    The three headline cards (`vacancies_solicited`, `registered_applicants`,
+    `placed_applicants`) each carry a period-over-period `change_pct`. The three
+    breakdowns are all scoped to `[start_date, end_date]`:
+
+    - Employment status of the registered cohort: `employed` + `unemployed` sum
+      to `registered_total`. A registrant reads as employed only when one of
+      their referrals reached HIRED; everyone else — no referral, or a referral
+      that never reached HIRED — reads as unemployed.
+    - Placement rate: `placed` out of `referred`, as `placement_rate` (a
+      percentage, 0.0 when there were no referrals).
+    - Gender split of the unemployed cohort: `unemployed_male` +
+      `unemployed_female` (registrants with an unknown sex fall in neither).
+
+    `top_vacancies` ranks the window's solicited listings by number of vacancies
+    (top 10), scoped to `[start_date, end_date]` like the other figures.
+    """
+
+    start_date: date
+    end_date: date
+    vacancies_solicited: SummaryMetric
+    registered_applicants: SummaryMetric
+    placed_applicants: SummaryMetric
+    registered_total: int
+    employed: int
+    unemployed: int
+    referred: int
+    placed: int
+    placement_rate: float
+    unemployed_male: int
+    unemployed_female: int
+    top_vacancies: list[TopVacancyRow]
+
+
 # --- Referral-to-Placement Funnel ------------------------------------------
 
 
@@ -312,3 +379,36 @@ class ReferralFunnelReport(BaseModel):
     interviewed_pct: float
     hired_pct: float
     interviewed_to_hired_pct: float
+
+
+# --- Unemployed Applicants by Education ------------------------------------
+
+
+class UnemployedByEducationReport(BaseModel):
+    """The "Unemployed Applicants by Education" report: the unemployed cohort
+    registered in the window, profiled by course / program.
+
+    The cohort is the applicants registered in `[start_date, end_date]` who read
+    as unemployed — they have no referral that reached HIRED, the same rule the
+    Employment Summary uses. `top_courses` ranks their course/program by headcount (top 10)
+    and `most_common_course` is the leader. `with_course` counts those who hold
+    or are pursuing a course (a non-blank course/program) and is the denominator
+    for `top3_share_pct`, the share of that degree-holding group made up by the
+    top three courses. `college_graduates` counts the cohort whose highest
+    education level reads as a completed college degree.
+
+    `by_education_level` buckets the whole unemployed cohort by highest
+    educational attainment (College Graduate, College Undergraduate, Senior High
+    School, …), ordered by headcount; `college_graduates` equals its "College
+    Graduate" bucket.
+    """
+
+    start_date: date
+    end_date: date
+    total_unemployed: int
+    most_common_course: str | None = None
+    college_graduates: int
+    with_course: int
+    top3_share_pct: float
+    top_courses: list[LabeledCount]
+    by_education_level: list[LabeledCount]

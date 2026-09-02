@@ -51,6 +51,28 @@ async def get_current_user(
     return user
 
 
+async def get_current_user_optional(
+    access_token: Annotated[str | None, Cookie(alias=ACCESS_COOKIE_NAME)] = None,
+    header_token: Annotated[str | None, Depends(oauth2_scheme)] = None,
+) -> User | None:
+    """Resolve the current user if a valid token is present, else ``None``.
+
+    Unlike ``get_current_user`` this never raises — it is used by the rate-limit
+    dependency, which must still run (keyed on IP) for anonymous callers and must
+    not itself turn a bad token into a 401 before the route's own auth guard does.
+    """
+    token = access_token or header_token
+    if token is None:
+        return None
+    try:
+        payload = TokenPayload(**decode_token(token))
+        if payload.sub is None or payload.type != ACCESS_TOKEN_TYPE:
+            return None
+        return await User.get(UUID(payload.sub))
+    except (jwt.PyJWTError, ValueError):
+        return None
+
+
 async def get_current_workspace_id(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> UUID:

@@ -11,10 +11,12 @@ from .reports_schemas import (
     ApplicantPlacedReport,
     ApplicantReferredReport,
     ApplicantRegisteredReport,
+    EmploymentSummaryReport,
     EstablishmentsRegisteredReport,
     JobSolicitedReport,
     PesoAccomplishmentReport,
     ReferralFunnelReport,
+    UnemployedByEducationReport,
 )
 
 router = APIRouter()
@@ -101,6 +103,30 @@ async def get_peso_accomplishment(
 ) -> PesoAccomplishmentReport:
     start, end = _resolve_window(start_date, end_date)
     return await reports_service.get_peso_accomplishment(
+        workspace_id=workspace_id, start_date=start, end_date=end
+    )
+
+
+@router.get("/employment-summary", response_model=EmploymentSummaryReport)
+async def get_employment_summary(
+    workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+    start_date: Annotated[date | None, Query()] = None,
+    end_date: Annotated[date | None, Query()] = None,
+) -> EmploymentSummaryReport:
+    start, end = _resolve_window(start_date, end_date)
+    return await reports_service.get_employment_summary(
+        workspace_id=workspace_id, start_date=start, end_date=end
+    )
+
+
+@router.get("/unemployed-by-education", response_model=UnemployedByEducationReport)
+async def get_unemployed_by_education(
+    workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+    start_date: Annotated[date | None, Query()] = None,
+    end_date: Annotated[date | None, Query()] = None,
+) -> UnemployedByEducationReport:
+    start, end = _resolve_window(start_date, end_date)
+    return await reports_service.get_unemployed_by_education(
         workspace_id=workspace_id, start_date=start, end_date=end
     )
 

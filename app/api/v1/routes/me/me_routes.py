@@ -1,3 +1,4 @@
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -7,7 +8,11 @@ from app.api.v1.routes.users import users_service as user_service
 from app.api.v1.routes.users.users_models import User
 from app.api.v1.routes.users.users_schemas import MePatch, UserRead
 from app.core.blob import AVATAR_CONTENT_TYPE_EXTENSIONS, AVATAR_MAX_BYTES
+from app.core.config import settings
+from app.core.rate_limit import enforce, hit, parse_rate, peek, reset
 from app.core.security import verify_password
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -39,11 +44,34 @@ async def update_me(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Current password is required to change your password",
             )
+        # Throttle current-password guesses per account: an attacker with a
+        # hijacked session should not get unlimited tries at the old password.
+        # Failures only — a legitimate user who mistypes a few times and then
+        # succeeds has the bucket cleared below.
+        pw_key = f"password:user:{current_user.id}"
+        pw_limit, pw_window = parse_rate(settings.RATE_LIMIT_PASSWORD_CHANGE)
+        if settings.RATE_LIMIT_ENABLED:
+            try:
+                enforce(await peek(pw_key, pw_limit))
+            except HTTPException:
+                raise
+            except Exception:
+                logger.exception("password-change rate limiter unavailable; failing open")
         if not verify_password(data.current_password, current_user.password):
+            if settings.RATE_LIMIT_ENABLED:
+                try:
+                    await hit(pw_key, pw_limit, pw_window)
+                except Exception:
+                    logger.exception("password-change rate limiter unavailable; failing open")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Current password is incorrect",
             )
+        if settings.RATE_LIMIT_ENABLED:
+            try:
+                await reset(pw_key)
+            except Exception:
+                logger.exception("password-change rate limiter unavailable; failing open")
 
     user = await user_service.update_user(current_user, data)
     return await user_service.build_user_read(user)

@@ -7,12 +7,21 @@ from app.api.deps import get_current_user, get_current_workspace_id
 from app.api.v1.routes.audit_logs import audit_logs_service
 from app.api.v1.routes.audit_logs.audit_logs_models import AuditEntity, AuditTone
 from app.api.v1.routes.users.users_models import User
+from app.core.config import settings
+from app.core.rate_limit import rate_limit
 from app.matching.extraction import ExtractionError, extract_text
 
+from ..jobs import jobs_service
+from ..jobs.jobs_models import JobStatus
+from ..recommended_jobs import recommended_jobs_service
+from ..recommended_jobs.recommended_jobs_models import RecommendedJobStatus
+from ..recommended_jobs.recommended_jobs_schemas import RecommendedJobCreate
 from . import applicants_service
 from .applicants_models import Applicant, ApplicantStatus
 from .applicants_schemas import (
     ApplicantCreate,
+    ApplicantImportRequest,
+    ApplicantImportResult,
     ApplicantList,
     ApplicantPatch,
     ApplicantRead,
@@ -76,7 +85,63 @@ async def create_applicant(
     return ApplicantRead.model_validate(applicant)
 
 
-@router.post("/extract", response_model=ResumeExtraction)
+@router.post("/import", response_model=ApplicantImportResult, status_code=status.HTTP_201_CREATED)
+async def import_applicants(
+    data: ApplicantImportRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+) -> ApplicantImportResult:
+    # Bulk-register applicants from an uploaded spreadsheet. Each item may name a
+    # job to refer the applicant to; rows without one are saved as registered only.
+    applicants_read: list[ApplicantRead] = []
+    referred = 0
+    for item in data.items:
+        applicant = await applicants_service.create_applicant(
+            item.applicant,
+            created_by=current_user.id,
+            workspace_id=workspace_id,
+            created_at=item.date_registered,
+        )
+        # Optional job assignment: refer only when a job is chosen and still
+        # active. Unlike the manual PATCH referral flow, importing a referral goes
+        # through the create path, which never decrements the job's vacancies.
+        if item.job_id is not None:
+            job = await jobs_service.get_job(item.job_id, workspace_id=workspace_id)
+            if job is not None and job.status == JobStatus.ACTIVE:
+                await recommended_jobs_service.create_recommended_job(
+                    RecommendedJobCreate(
+                        job_id=job.id,
+                        applicant_id=applicant.id,
+                        status=item.status or RecommendedJobStatus.REFERRED,
+                        assessed_by=current_user.id,
+                    ),
+                    workspace_id=workspace_id,
+                    assessed_by=current_user.id,
+                )
+                referred += 1
+        applicants_read.append(ApplicantRead.model_validate(applicant))
+
+    await audit_logs_service.record_audit(
+        workspace_id=workspace_id,
+        entity=AuditEntity.APPLICANTS,
+        entity_label="Applicant",
+        actor=current_user.fullname,
+        action=f"imported {len(applicants_read)} applicants",
+        icon="upload",
+        icon_tone=AuditTone.GREEN,
+        chip_tone=AuditTone.GREEN,
+        records=[f"{len(applicants_read)} applicants"],
+    )
+    return ApplicantImportResult(
+        created=len(applicants_read), referred=referred, applicants=applicants_read
+    )
+
+
+@router.post(
+    "/extract",
+    response_model=ResumeExtraction,
+    dependencies=[Depends(rate_limit("extract", settings.RATE_LIMIT_EXTRACT_USER, by="user"))],
+)
 async def extract_applicant_resume(
     file: Annotated[UploadFile, File()],
 ) -> ResumeExtraction:
@@ -178,6 +243,7 @@ async def delete_applicant(
     "/{applicant_id}/files",
     response_model=ApplicantRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit("upload", settings.RATE_LIMIT_UPLOAD_USER, by="user"))],
 )
 async def upload_applicant_file(
     applicant_id: UUID,

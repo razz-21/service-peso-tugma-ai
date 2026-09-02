@@ -28,7 +28,12 @@ async def get_companies_map(jobs: list[Job], workspace_id: UUID) -> dict[UUID, C
 
 
 async def create_job(data: JobCreate, workspace_id: UUID) -> Job:
-    job = Job(**data.model_dump(), workspace_id=workspace_id)
+    # `created_at` is excluded from the spread so it never overrides the model's
+    # now() default with None; it's applied explicitly when the officer set it
+    # (backdating a posting to a previous creation date).
+    job = Job(**data.model_dump(exclude={"created_at"}), workspace_id=workspace_id)
+    if data.created_at is not None:
+        job.created_at = data.created_at
     await job.insert()
     return job
 
@@ -56,6 +61,10 @@ async def list_jobs(
 
 async def update_job(job: Job, data: JobPatch) -> Job:
     changes = data.model_dump(exclude_unset=True)
+    # `created_at` is editable (backdating), but never clearable — drop a stray
+    # null so it can only be set to a real date, never wiped.
+    if changes.get("created_at") is None:
+        changes.pop("created_at", None)
     for field, value in changes.items():
         setattr(job, field, value)
     await job.save()

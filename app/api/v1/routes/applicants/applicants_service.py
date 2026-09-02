@@ -21,9 +21,25 @@ async def get_applicant(applicant_id: UUID, workspace_id: UUID) -> Applicant | N
 
 
 async def create_applicant(
-    data: ApplicantCreate, created_by: UUID, workspace_id: UUID
+    data: ApplicantCreate,
+    created_by: UUID,
+    workspace_id: UUID,
+    created_at: str | None = None,
 ) -> Applicant:
-    applicant = Applicant(**data.model_dump(), created_by=created_by, workspace_id=workspace_id)
+    # `created_at` is excluded from the spread so it never overrides the model's
+    # now() default with None; it's applied explicitly below when provided.
+    applicant = Applicant(
+        **data.model_dump(exclude={"created_at"}),
+        created_by=created_by,
+        workspace_id=workspace_id,
+    )
+    # Honor an explicit registration date so reports date the applicant when they
+    # registered, not when the record was entered. Precedence: the `created_at`
+    # argument (bulk import's per-row date) over the payload's `created_at` (the
+    # create form's "Date registered" field). Omitted → the now() default stands.
+    effective_created_at = created_at or data.created_at
+    if effective_created_at is not None:
+        applicant.created_at = effective_created_at
     await applicant.insert()
     return applicant
 
