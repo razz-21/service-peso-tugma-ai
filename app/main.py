@@ -32,6 +32,11 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        # Non-safelisted response headers are invisible to browser JS unless
+        # explicitly exposed. The 429 rate-limit responses carry `Retry-After`
+        # (and the informational `X-RateLimit-*` headers); without this the
+        # frontend can't read them and falls back to a vague "in a few minutes".
+        expose_headers=["Retry-After", "X-RateLimit-Limit", "X-RateLimit-Remaining"],
     )
 
     # The job-matching pipeline calls a hosted embedding endpoint; when that
