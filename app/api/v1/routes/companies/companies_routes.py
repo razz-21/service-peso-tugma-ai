@@ -11,6 +11,7 @@ from app.core.blob import AVATAR_CONTENT_TYPE_EXTENSIONS, AVATAR_MAX_BYTES
 
 from . import companies_service
 from .companies_schemas import (
+    CompanyApplicantList,
     CompanyCreate,
     CompanyList,
     CompanyPatch,
@@ -68,6 +69,24 @@ async def get_company(
     if company is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
     return CompanyRead.model_validate(company)
+
+
+@router.get("/{company_id}/applicants", response_model=CompanyApplicantList)
+async def list_company_applicants(
+    company_id: UUID,
+    workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> CompanyApplicantList:
+    # Applicants referred to this company's jobs. 404 first if the company is
+    # missing / in another workspace, so the table never reads cross-tenant data.
+    company = await companies_service.get_company(company_id, workspace_id=workspace_id)
+    if company is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
+    items, total = await companies_service.list_company_applicants(
+        company_id=company_id, workspace_id=workspace_id, limit=limit, offset=offset
+    )
+    return CompanyApplicantList(total=total, limit=limit, offset=offset, items=items)
 
 
 @router.patch("/{company_id}", response_model=CompanyRead)
@@ -168,9 +187,7 @@ async def remove_company_avatar(
 async def delete_company(
     company_id: UUID,
     workspace_id: Annotated[UUID, Depends(get_current_workspace_id)],
-    current_user: Annotated[
-        User, Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.ADMIN))
-    ],
+    current_user: Annotated[User, Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.ADMIN))],
 ) -> None:
     company = await companies_service.get_company(company_id, workspace_id=workspace_id)
     if company is None:
