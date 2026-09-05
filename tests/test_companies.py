@@ -25,3 +25,12 @@ async def test_remove_avatar_requires_auth(client: AsyncClient) -> None:
         f"{settings.API_V1_PREFIX}/companies/00000000-0000-0000-0000-000000000000/avatar",
     )
     assert response.status_code == 401
+
+
+async def test_list_company_applicants_requires_auth(client: AsyncClient) -> None:
+    # The company applicants table is gated on auth (workspace scoping), so an
+    # unauthenticated request is rejected before it ever reaches Mongo.
+    response = await client.get(
+        f"{settings.API_V1_PREFIX}/companies/00000000-0000-0000-0000-000000000000/applicants",
+    )
+    assert response.status_code == 401

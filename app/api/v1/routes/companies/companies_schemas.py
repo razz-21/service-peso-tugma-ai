@@ -63,3 +63,42 @@ class CompanyList(BaseModel):
     limit: int
     offset: int
     items: list[CompanyRead]
+
+
+class CompanyApplicantApplicant(BaseModel):
+    """Applicant summary shown in a company's applicants table (resolves the FK)."""
+
+    id: UUID
+    name: str
+    avatar: str | None = None
+
+
+class CompanyApplicantRead(BaseModel):
+    """One applicant referred to a company, for the company details table.
+
+    A company has no direct applicant link — the association runs through a
+    referral: a `recommended_jobs` row (with a lifecycle status set) that points
+    an applicant at one of the company's jobs. This projects that referral into
+    exactly what the "Applicants" table renders: who was referred, the job they
+    were referred to, the referral status, and when they were referred.
+    """
+
+    # The referral (recommended_jobs) id — the row's stable key.
+    id: UUID
+    applicant: CompanyApplicantApplicant | None = None
+    # Title of the job the applicant was referred to (None if the job is gone).
+    referred_to: str | None = None
+    job_id: UUID
+    # Referral lifecycle status. Typed as a plain string (its value mirrors
+    # RecommendedJobStatus) to avoid a module-load import cycle between the
+    # companies and recommended_jobs slices; the client validates the enum.
+    status: str
+    # When the applicant was referred (recommended_jobs.referred_at).
+    date_referred: str
+
+
+class CompanyApplicantList(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    items: list[CompanyApplicantRead]
